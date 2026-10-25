@@ -7,6 +7,25 @@ import { useAuthStore } from '../store/auth';
 
 const PLANS = [
   {
+    id: 'free_trial',
+    name: '14-Day Free Trial',
+    price_monthly: 0,
+    price_yearly: 0,
+    badge: '14 Days Free',
+    description: 'Risk-free full access to Knotique. Just sign in to start.',
+    features: [
+      { text: '14-Day full access', included: true },
+      { text: 'Up to 2 workers', included: true },
+      { text: 'Up to 50 products', included: true },
+      { text: '1 sales platform link', included: true },
+      { text: 'Basic reports & analytics', included: true },
+      { text: 'Manual orders log', included: true },
+      { text: 'No credit card required', included: true },
+      { text: 'CSV order imports', included: false },
+      { text: 'Payout automation', included: false },
+    ],
+  },
+  {
     id: 'starter',
     name: 'Starter',
     price_monthly: 499,
@@ -81,6 +100,16 @@ export default function PricingPage() {
   const subscribeMutation = useMutation({
     mutationFn: (planId) => api.post('/billing/subscribe', { plan_id: planId }).then(r => r.data),
     onSuccess: (data, planId) => {
+      // Free trial instant activation
+      if (data.isFreeTrial) {
+        updateUser(data.tenant);
+        qc.invalidateQueries({ queryKey: ['tenant-usage'] });
+        setSubmittingPlan(null);
+        toast.success(data.message || '14-Day Free Trial activated! Enjoy full access.');
+        navigate('/');
+        return;
+      }
+
       // Direct payment simulation in dev mode / mock mode
       toast.success('Simulating subscription checkout...');
       setTimeout(() => {
@@ -105,14 +134,8 @@ export default function PricingPage() {
 
   const handleAction = (planId) => {
     if (!user) {
-      // Redirect public guests to signup with preselected plan
+      // Demands login/signup for guests: redirect to signup with preselected plan
       navigate(`/signup?plan=${planId}`);
-      return;
-    }
-
-    // Gated actions for logged in tenants
-    if (planId === 'starter') {
-      toast.error('Free starter plan does not require checkout.');
       return;
     }
 
@@ -157,41 +180,61 @@ export default function PricingPage() {
         </div>
 
         {/* Pricing Cards Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 items-stretch mb-20">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 items-stretch mb-20">
           {PLANS.map((plan) => {
+            const isFree = plan.price_monthly === 0;
             const price = billingCycle === 'monthly' ? plan.price_monthly : plan.price_yearly;
             const isCurrent = currentPlanId === plan.id;
             return (
               <div
                 key={plan.id}
-                className={`bg-white rounded-3xl p-8 border-2 flex flex-col justify-between relative shadow-sm transition-all duration-300 hover:shadow-md ${
-                  plan.popular
-                    ? 'border-violet-600 ring-4 ring-violet-500/10 scale-105 z-10'
+                className={`bg-white rounded-3xl p-7 border-2 flex flex-col justify-between relative shadow-xs transition-all duration-300 hover:shadow-md ${
+                  plan.id === 'free_trial'
+                    ? 'border-emerald-500 ring-2 ring-emerald-500/10'
+                    : plan.popular
+                    ? 'border-violet-600 ring-4 ring-violet-500/10 scale-102 z-10'
                     : 'border-slate-100'
                 }`}
               >
-                {plan.popular && (
-                  <span className="absolute -top-4 left-1/2 -translate-x-1/2 bg-violet-600 text-white text-xs font-bold px-3 py-1 rounded-full uppercase tracking-wider shadow-sm">
+                {plan.popular ? (
+                  <span className="absolute -top-3.5 left-1/2 -translate-x-1/2 bg-violet-600 text-white text-[11px] font-bold px-3 py-0.5 rounded-full uppercase tracking-wider shadow-sm">
                     Most Popular
                   </span>
-                )}
+                ) : plan.id === 'free_trial' ? (
+                  <span className="absolute -top-3.5 left-1/2 -translate-x-1/2 bg-emerald-600 text-white text-[11px] font-bold px-3 py-0.5 rounded-full uppercase tracking-wider shadow-sm">
+                    14 Days Free
+                  </span>
+                ) : null}
 
                 <div>
                   <h3 className="text-xl font-bold text-slate-800">{plan.name}</h3>
-                  <p className="text-slate-400 text-xs mt-1 leading-normal">{plan.description}</p>
+                  <p className="text-slate-400 text-xs mt-1 leading-normal min-h-[32px]">{plan.description}</p>
                   
-                  <div className="mt-6 flex items-baseline">
-                    <span className="text-4xl font-extrabold text-slate-800">₹{price}</span>
-                    <span className="text-slate-400 text-xs ml-1.5">/mo</span>
+                  <div className="mt-5 flex items-baseline">
+                    {isFree ? (
+                      <>
+                        <span className="text-4xl font-extrabold text-slate-800">₹0</span>
+                        <span className="text-emerald-600 font-bold text-xs ml-2">/ 14 Days Free</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="text-4xl font-extrabold text-slate-800">₹{price}</span>
+                        <span className="text-slate-400 text-xs ml-1.5">/mo</span>
+                      </>
+                    )}
                   </div>
-                  {billingCycle === 'yearly' && (
+                  {isFree ? (
+                    <p className="text-[10px] text-emerald-600 font-semibold mt-1">Requires only sign in · No card needed</p>
+                  ) : billingCycle === 'yearly' ? (
                     <p className="text-[10px] text-slate-400 font-medium mt-1">Billed ₹{price * 12} annually</p>
+                  ) : (
+                    <p className="text-[10px] text-slate-400 font-medium mt-1">Standard monthly billing</p>
                   )}
 
-                  <ul className="mt-8 space-y-3.5 border-t border-slate-100 pt-6">
+                  <ul className="mt-6 space-y-3 border-t border-slate-100 pt-5">
                     {plan.features.map((f, i) => (
-                      <li key={i} className={`flex items-start gap-3.5 text-sm ${f.included ? 'text-slate-600' : 'text-slate-300 line-through'}`}>
-                        <span className={`text-xs mt-0.5 ${f.included ? 'text-emerald-500' : 'text-slate-300'}`}>
+                      <li key={i} className={`flex items-start gap-2.5 text-xs ${f.included ? 'text-slate-600' : 'text-slate-300 line-through'}`}>
+                        <span className={`text-xs mt-0.5 ${f.included ? 'text-emerald-500 font-bold' : 'text-slate-300'}`}>
                           {f.included ? '✓' : '✕'}
                         </span>
                         {f.text}
@@ -200,17 +243,19 @@ export default function PricingPage() {
                   </ul>
                 </div>
 
-                <div className="mt-8 pt-4">
+                <div className="mt-6 pt-3">
                   {isCurrent ? (
-                    <span className="w-full text-center py-3 text-slate-500 text-sm font-semibold rounded-2xl bg-slate-100 block">
+                    <span className="w-full text-center py-2.5 text-slate-500 text-xs font-semibold rounded-2xl bg-slate-100 block">
                       Your Current Plan
                     </span>
                   ) : (
                     <button
                       onClick={() => handleAction(plan.id)}
                       disabled={submittingPlan !== null}
-                      className={`w-full py-3 rounded-2xl text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${
-                        plan.popular
+                      className={`w-full py-2.5 rounded-2xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                        plan.id === 'free_trial'
+                          ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm shadow-emerald-500/20'
+                          : plan.popular
                           ? 'bg-violet-600 hover:bg-violet-700 text-white shadow-md shadow-violet-500/20'
                           : 'bg-slate-800 hover:bg-slate-900 text-white'
                       }`}
@@ -218,8 +263,10 @@ export default function PricingPage() {
                       {submittingPlan === plan.id ? (
                         <>
                           <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                          Processing…
+                          Activating…
                         </>
+                      ) : plan.id === 'free_trial' ? (
+                        user ? 'Activate 14-Day Free Trial' : 'Start 14-Day Free Trial'
                       ) : (
                         `Choose ${plan.name}`
                       )}

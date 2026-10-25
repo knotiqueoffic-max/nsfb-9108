@@ -84,6 +84,30 @@ router.post('/subscribe', ownerOnly, async (req, res) => {
   const { plan_id } = req.body;
   if (!plan_id) return res.status(400).json({ error: 'plan_id is required' });
 
+  // Handle Free 14-Day Trial: No payment gateway required
+  if (plan_id === 'free_trial' || plan_id === 'free') {
+    try {
+      const trialEndsAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+      await db('tenants').where('id', req.tenant_id).update({
+        plan_id:             'free_trial',
+        subscription_status: 'trialing',
+        trial_ends_at:       trialEndsAt,
+        updated_at:          db.fn.now(),
+      });
+
+      const updatedTenant = await db('tenants').where('id', req.tenant_id).first();
+      return res.json({
+        status:      'success',
+        isFreeTrial: true,
+        tenant:      updatedTenant,
+        message:     'Your 14-Day Free Trial has been activated successfully! Enjoy full access.',
+      });
+    } catch (err) {
+      console.error('Free trial activation error:', err);
+      return res.status(500).json({ error: 'Failed to activate free trial.' });
+    }
+  }
+
   try {
     const { subscriptionId, shortUrl } = await createSubscription(req.tenant_id, plan_id);
     res.json({

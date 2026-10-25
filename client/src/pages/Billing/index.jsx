@@ -7,6 +7,14 @@ import { formatCurrency, formatDate } from '../../utils/index';
 
 const PLANS = [
   {
+    id: 'free_trial',
+    name: '14-Day Free Trial',
+    price: 0,
+    description: '14 days of free access. No payment card required.',
+    features: ['Up to 2 workers', 'Up to 50 products', '1 sales platform link', 'Basic reports & production tracking', 'No credit card needed'],
+    badge: 'Free Trial',
+  },
+  {
     id: 'starter',
     name: 'Starter',
     price: 499,
@@ -82,6 +90,14 @@ export default function BillingPage() {
   const subscribeMutation = useMutation({
     mutationFn: (planId) => api.post('/billing/subscribe', { plan_id: planId }).then(r => r.data),
     onSuccess: (data, planId) => {
+      if (data.isFreeTrial) {
+        updateUser(data.tenant);
+        qc.invalidateQueries({ queryKey: ['tenant-usage'] });
+        qc.invalidateQueries({ queryKey: ['invoices'] });
+        setSubmittingPlan(null);
+        toast.success(data.message || '14-Day Free Trial activated successfully! 🎉');
+        return;
+      }
       handleRazorpayCheckout(data, planId);
     },
     onError: (err) => {
@@ -228,37 +244,52 @@ export default function BillingPage() {
       {/* Plan Selection Cards */}
       <div className="space-y-4">
         <h3 className="text-lg font-bold text-slate-800">Available Plans</h3>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           {PLANS.map((plan) => {
             const isCurrent = currentPlan?.id === plan.id;
-            const isStarter = plan.id === 'starter';
+            const isFree = plan.price === 0;
             return (
               <div
                 key={plan.id}
                 className={`card rounded-3xl border-2 flex flex-col justify-between p-6 transition-all duration-200 ${
-                  isCurrent
+                  plan.id === 'free_trial'
+                    ? 'border-emerald-500 ring-2 ring-emerald-500/10'
+                    : isCurrent
                     ? 'border-violet-600 shadow-md shadow-violet-500/5 bg-violet-50/10'
                     : 'border-slate-100 hover:border-slate-300'
                 }`}
               >
                 <div>
-                  {plan.popular && (
+                  {plan.popular ? (
                     <span className="bg-violet-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider inline-block mb-3">
                       Best Value
                     </span>
-                  )}
+                  ) : plan.id === 'free_trial' ? (
+                    <span className="bg-emerald-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider inline-block mb-3">
+                      14 Days Free
+                    </span>
+                  ) : null}
                   <h4 className="text-xl font-bold text-slate-800">{plan.name}</h4>
                   <p className="text-xs text-slate-500 mt-1 leading-snug">{plan.description}</p>
                   
                   <div className="mt-4 flex items-baseline">
-                    <span className="text-3xl font-extrabold text-slate-800">₹{plan.price}</span>
-                    <span className="text-slate-400 text-xs ml-1">/mo</span>
+                    {isFree ? (
+                      <>
+                        <span className="text-3xl font-extrabold text-slate-800">₹0</span>
+                        <span className="text-emerald-600 font-bold text-xs ml-1">/ 14 Days Free</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="text-3xl font-extrabold text-slate-800">₹{plan.price}</span>
+                        <span className="text-slate-400 text-xs ml-1">/mo</span>
+                      </>
+                    )}
                   </div>
 
                   <ul className="mt-6 space-y-2 text-sm text-slate-600">
                     {plan.features.map((f, i) => (
                       <li key={i} className="flex items-start gap-2">
-                        <span className="text-emerald-500 text-xs mt-0.5">✓</span>
+                        <span className="text-emerald-500 text-xs mt-0.5 font-bold">✓</span>
                         {f}
                       </li>
                     ))}
@@ -270,17 +301,28 @@ export default function BillingPage() {
                     <span className="w-full text-center py-2.5 text-slate-500 text-sm font-semibold rounded-2xl bg-slate-100 inline-block">
                       Current Active Plan
                     </span>
-                  ) : isStarter ? (
-                    <span className="w-full text-center py-2.5 text-slate-400 text-sm font-semibold inline-block">
-                      Basic Free Plan
-                    </span>
                   ) : (
                     <button
                       onClick={() => handleSelectPlan(plan.id)}
                       disabled={submittingPlan !== null}
-                      className="btn-primary w-full justify-center py-2.5"
+                      className={`w-full py-2.5 rounded-2xl text-sm font-semibold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                        plan.id === 'free_trial'
+                          ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs'
+                          : plan.popular
+                          ? 'bg-violet-600 hover:bg-violet-700 text-white shadow-md shadow-violet-500/20'
+                          : 'bg-slate-800 hover:bg-slate-900 text-white'
+                      }`}
                     >
-                      {submittingPlan === plan.id ? 'Connecting…' : 'Subscribe Now'}
+                      {submittingPlan === plan.id ? (
+                        <>
+                          <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin mr-1" />
+                          Activating…
+                        </>
+                      ) : plan.id === 'free_trial' ? (
+                        'Activate 14-Day Free Trial'
+                      ) : (
+                        `Upgrade to ${plan.name}`
+                      )}
                     </button>
                   )}
                 </div>

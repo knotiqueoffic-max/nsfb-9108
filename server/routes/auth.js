@@ -66,12 +66,12 @@ router.post('/signup', [
   body('email').isEmail().normalizeEmail().withMessage('Valid email is required'),
   body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
   body('company_name').trim().notEmpty().withMessage('Business name is required'),
-  body('plan_id').optional().isIn(['starter', 'growth', 'business']),
+  body('plan_id').optional().isIn(['free_trial', 'starter', 'growth', 'business']),
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-  const { name, email, password, company_name, plan_id = 'starter', business_category } = req.body;
+  const { name, email, password, company_name, plan_id = 'free_trial', business_category } = req.body;
 
   // Check email not already used
   const existingUser = await db('users').where('email', email).first();
@@ -212,7 +212,7 @@ router.get('/config', (req, res) => {
 
 // ─── POST /api/auth/google-login ──────────────────────────────────────────────
 router.post('/google-login', async (req, res) => {
-  const { token, plan_id = 'starter' } = req.body;
+  const { token, plan_id = 'free_trial' } = req.body;
   if (!token) return res.status(400).json({ error: 'Google ID token is required' });
 
   try {

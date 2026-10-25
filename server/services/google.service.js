@@ -1,15 +1,10 @@
 const { OAuth2Client } = require('google-auth-library');
 
-const CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
-const isMockGoogle = !CLIENT_ID;
+const CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '268763150621-4qgrhe5pgmkd7s3ru6mucmk9m9e3vr9e.apps.googleusercontent.com';
+const isMockGoogle = false;
 
-let client = null;
-if (!isMockGoogle) {
-  client = new OAuth2Client(CLIENT_ID);
-  console.log('🔑 Google Auth Library initialized in Live mode.');
-} else {
-  console.warn('⚠️ GOOGLE_CLIENT_ID is missing from .env. Google Auth running in MOCK Mode.');
-}
+const client = new OAuth2Client(CLIENT_ID);
+console.log('🔑 Real Google OAuth2 Client initialized with Client ID:', CLIENT_ID);
 
 /**
  * Verifies a Google ID Token (credential) received from the frontend.
