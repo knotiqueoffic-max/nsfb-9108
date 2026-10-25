@@ -61,5 +61,8 @@ export const useAuthStore = create((set) => ({
   get isLocked()           { return getStoredUser()?.subscription_status === 'locked'; },
   get isOwner()            { return ['owner', 'super_admin'].includes(getStoredUser()?.role); },
   get isAdmin()            { return ['owner', 'admin', 'super_admin'].includes(getStoredUser()?.role); },
+  get isVendor()           { return getStoredUser()?.role === 'vendor'; },
+  get isSubvendor()        { return getStoredUser()?.role === 'subvendor'; },
   get isWorker()           { return getStoredUser()?.role === 'worker'; },
+  get isManager()          { return ['owner', 'admin', 'vendor', 'subvendor', 'super_admin'].includes(getStoredUser()?.role); },
 }));

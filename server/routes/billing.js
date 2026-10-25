@@ -1,7 +1,9 @@
 const router = require('express').Router();
+const crypto = require('crypto');
 const db = require('../db/database');
-const { authenticate, ownerOnly } = require('../middleware/auth');
+const { authenticate, ownerOnly, requireTenant } = require('../middleware/auth');
 const { createSubscription, cancelSubscription, validateWebhookSignature } = require('../services/razorpay.service');
+const { logAuditEvent } = require('../services/audit.service');
 
 // ─── Webhook (Public; does not use authenticate middleware) ──────────────────
 router.post('/webhook', async (req, res) => {
@@ -64,6 +66,7 @@ router.post('/webhook', async (req, res) => {
 
 // All other endpoints require user authentication
 router.use(authenticate);
+router.use(requireTenant);
 
 // ─── GET /api/billing/plans — list all available plans ──────────────────────
 router.get('/plans', async (req, res) => {
@@ -96,6 +99,16 @@ router.post('/subscribe', ownerOnly, async (req, res) => {
       });
 
       const updatedTenant = await db('tenants').where('id', req.tenant_id).first();
+
+      await logAuditEvent({
+        tenant_id: req.tenant_id,
+        user_id: req.user.id,
+        action: 'TRIAL_ACTIVATED',
+        target_type: 'tenants',
+        target_id: req.tenant_id,
+        ip_address: req.ip,
+      });
+
       return res.json({
         status:      'success',
         isFreeTrial: true,
@@ -110,6 +123,17 @@ router.post('/subscribe', ownerOnly, async (req, res) => {
 
   try {
     const { subscriptionId, shortUrl } = await createSubscription(req.tenant_id, plan_id);
+
+    await logAuditEvent({
+      tenant_id: req.tenant_id,
+      user_id: req.user.id,
+      action: 'SUBSCRIPTION_INITIALIZED',
+      target_type: 'tenants',
+      target_id: req.tenant_id,
+      ip_address: req.ip,
+      details: { plan_id, subscriptionId },
+    });
+
     res.json({
       subscriptionId,
       shortUrl,
@@ -166,6 +190,17 @@ router.post('/verify-payment', ownerOnly, async (req, res) => {
   });
 
   const updatedTenant = await db('tenants').where('id', req.tenant_id).first();
+
+  await logAuditEvent({
+    tenant_id: req.tenant_id,
+    user_id: req.user.id,
+    action: 'SUBSCRIPTION_VERIFIED_PAID',
+    target_type: 'tenants',
+    target_id: req.tenant_id,
+    ip_address: req.ip,
+    details: { plan_id, invoice_number: nextInvNum },
+  });
+
   res.json({
     status: 'success',
     tenant: updatedTenant,
@@ -192,6 +227,16 @@ router.post('/cancel', ownerOnly, async (req, res) => {
     });
 
     const updatedTenant = await db('tenants').where('id', req.tenant_id).first();
+
+    await logAuditEvent({
+      tenant_id: req.tenant_id,
+      user_id: req.user.id,
+      action: 'SUBSCRIPTION_CANCELED',
+      target_type: 'tenants',
+      target_id: req.tenant_id,
+      ip_address: req.ip,
+    });
+
     res.json({
       status: 'success',
       tenant: updatedTenant,

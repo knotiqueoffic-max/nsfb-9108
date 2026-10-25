@@ -18,11 +18,13 @@ import BillingPage from './pages/Billing/index'
 import SuperAdminPage from './pages/SuperAdmin/index'
 import PricingPage from './pages/Pricing'
 
-function ProtectedRoute({ children, adminOnly = false }) {
+function ProtectedRoute({ children, adminOnly = false, managerOnly = false }) {
   const { isAuthenticated, user } = useAuthStore()
   if (!isAuthenticated) return <Navigate to="/login" replace />
   const isAdmin = ['owner', 'admin', 'super_admin'].includes(user?.role)
+  const isManager = ['owner', 'admin', 'vendor', 'subvendor', 'super_admin'].includes(user?.role)
   if (adminOnly && !isAdmin) return <Navigate to="/" replace />
+  if (managerOnly && !isManager) return <Navigate to="/" replace />
   return children
 }
 
@@ -55,7 +57,7 @@ export default function App() {
         </ProtectedRoute>
       } />
       <Route path="/workers" element={
-        <ProtectedRoute adminOnly>
+        <ProtectedRoute managerOnly>
           <Layout><Workers /></Layout>
         </ProtectedRoute>
       } />

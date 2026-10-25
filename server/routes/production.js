@@ -1,10 +1,13 @@
 const router = require('express').Router();
 const { body, validationResult } = require('express-validator');
 const db = require('../db/database');
-const { authenticate, adminOnly } = require('../middleware/auth');
+const { authenticate, adminOnly, workerManagerOnly, requireTenant, checkTenantLock } = require('../middleware/auth');
+const { ROLES } = require('../constants/roles');
 const { deductMaterialsForProduction, calcLaborCost } = require('../services/cost.service');
+const { logAuditEvent } = require('../services/audit.service');
 
 router.use(authenticate);
+router.use(requireTenant);
 
 // GET /api/production — filterable by worker, product, date range, status/is_paid
 router.get('/', async (req, res) => {
@@ -130,9 +133,9 @@ router.post('/', [
 
   const { product_id, quantity, defect_count, production_date, notes, hours_worked, status } = req.body;
 
-  // Determine worker_id: admin can specify, worker uses self
+  // Determine worker_id: managers can specify, worker uses self
   let worker_id = req.user.id;
-  if (['owner', 'admin'].includes(req.user.role) && req.body.worker_id) {
+  if ([ROLES.OWNER, ROLES.ADMIN, ROLES.VENDOR, ROLES.SUBVENDOR, ROLES.SUPER_ADMIN].includes(req.user.role) && req.body.worker_id) {
     worker_id = parseInt(req.body.worker_id);
   }
 
@@ -188,17 +191,28 @@ router.post('/', [
     .select('pe.*', 'u.name as worker_name', 'p.name as product_name', 'p.sku')
     .first();
 
+  await logAuditEvent({
+    tenant_id: req.tenant_id,
+    user_id: req.user.id,
+    action: 'PRODUCTION_LOGGED',
+    target_type: 'production_entries',
+    target_id: entryId,
+    ip_address: req.ip,
+    details: { worker_id, product_id, quantity },
+  });
+
   res.status(201).json({ entry, deductions });
 });
 
 // PUT /api/production/:id — update entry / add notes
 router.put('/:id', async (req, res) => {
-  // Verify ownership: admin can edit any entry in tenant; worker can edit their own entry
+  // Verify ownership: manager can edit any entry in tenant; worker can edit their own entry
   let query = db('production_entries')
     .where('id', req.params.id)
     .where('tenant_id', req.tenant_id);
-  
-  if (req.user.role === 'worker') {
+
+  const isManager = [ROLES.OWNER, ROLES.ADMIN, ROLES.VENDOR, ROLES.SUBVENDOR, ROLES.SUPER_ADMIN].includes(req.user.role);
+  if (!isManager) {
     query = query.where('worker_id', req.user.id);
   }
   const existingEntry = await query.first();
@@ -237,8 +251,8 @@ router.put('/:id', async (req, res) => {
   res.json(entry);
 });
 
-// PUT /api/production/:id/toggle-paid — admin toggle paid status
-router.put('/:id/toggle-paid', adminOnly, async (req, res) => {
+// PUT /api/production/:id/toggle-paid — manager toggle paid status
+router.put('/:id/toggle-paid', workerManagerOnly, async (req, res) => {
   const entry = await db('production_entries')
     .where('id', req.params.id)
     .where('tenant_id', req.tenant_id)
@@ -265,8 +279,8 @@ router.put('/:id/toggle-paid', adminOnly, async (req, res) => {
   res.json(updated);
 });
 
-// DELETE /api/production/:id — admin only (reverses stock changes)
-router.delete('/:id', adminOnly, async (req, res) => {
+// DELETE /api/production/:id — manager only (reverses stock changes)
+router.delete('/:id', workerManagerOnly, async (req, res) => {
   const entry = await db('production_entries')
     .where('id', req.params.id)
     .where('tenant_id', req.tenant_id)
@@ -301,11 +315,21 @@ router.delete('/:id', adminOnly, async (req, res) => {
     .where('id', req.params.id)
     .where('tenant_id', req.tenant_id)
     .del();
+
+  await logAuditEvent({
+    tenant_id: req.tenant_id,
+    user_id: req.user.id,
+    action: 'PRODUCTION_DELETED',
+    target_type: 'production_entries',
+    target_id: req.params.id,
+    ip_address: req.ip,
+  });
+
   res.json({ message: 'Production entry deleted and stock restored' });
 });
 
-// POST /api/production/bulk-toggle-paid — admin bulk mark paid/unpaid or update status
-router.post('/bulk-toggle-paid', adminOnly, async (req, res) => {
+// POST /api/production/bulk-toggle-paid — manager bulk mark paid/unpaid or update status
+router.post('/bulk-toggle-paid', workerManagerOnly, async (req, res) => {
   const { ids, is_paid, status } = req.body;
   if (!Array.isArray(ids) || ids.length === 0) {
     return res.status(400).json({ error: 'No entry IDs provided' });
@@ -331,8 +355,8 @@ router.post('/bulk-toggle-paid', adminOnly, async (req, res) => {
   res.json({ message: `Updated ${ids.length} entries to ${newIsPaid ? 'Paid' : 'Unpaid'}` });
 });
 
-// POST /api/production/bulk-delete — admin bulk delete entries (reverses stock)
-router.post('/bulk-delete', adminOnly, async (req, res) => {
+// POST /api/production/bulk-delete — manager bulk delete entries (reverses stock)
+router.post('/bulk-delete', workerManagerOnly, async (req, res) => {
   const { ids } = req.body;
   if (!Array.isArray(ids) || ids.length === 0) {
     return res.status(400).json({ error: 'No entry IDs provided' });
@@ -372,6 +396,16 @@ router.post('/bulk-delete', adminOnly, async (req, res) => {
     .whereIn('id', ids)
     .where('tenant_id', req.tenant_id)
     .del();
+
+  await logAuditEvent({
+    tenant_id: req.tenant_id,
+    user_id: req.user.id,
+    action: 'PRODUCTION_BULK_DELETED',
+    target_type: 'production_entries',
+    ip_address: req.ip,
+    details: { count: ids.length },
+  });
+
   res.json({ message: `Deleted ${ids.length} production entries and restored stock` });
 });
 

@@ -98,8 +98,9 @@ async function suggestPrices(productId, { laborCostPerMinute = 1, desiredMarginP
  * Recalculate avg_cost_per_unit for a material using weighted moving average.
  * Called after every purchase. Optionally scoped by tenantId for defense-in-depth.
  */
-async function recalcAvgCost(materialId, newQty, newCostPerUnit, tenantId = null) {
-  const query = db('raw_materials').where('id', materialId);
+async function recalcAvgCost(materialId, newQty, newCostPerUnit, tenantId = null, trx = null) {
+  const knexClient = trx || db;
+  const query = knexClient('raw_materials').where('id', materialId);
   if (tenantId) query.where('tenant_id', tenantId);
   const mat = await query.first();
   if (!mat) throw new Error('Material not found');
@@ -111,11 +112,11 @@ async function recalcAvgCost(materialId, newQty, newCostPerUnit, tenantId = null
     ? ((oldStock * oldAvgCost) + (newQty * newCostPerUnit)) / totalQty
     : newCostPerUnit;
 
-  await db('raw_materials').where('id', materialId).update({
+  await knexClient('raw_materials').where('id', materialId).update({
     stock_quantity:    totalQty,
     avg_cost_per_unit: newAvgCost,
     cost_per_unit:     newCostPerUnit,
-    updated_at:        db.fn.now(),
+    updated_at:        knexClient.fn.now(),
   });
 
   return { new_stock: totalQty, new_avg_cost: newAvgCost };

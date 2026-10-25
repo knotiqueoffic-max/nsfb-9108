@@ -8,7 +8,7 @@ const navItems = [
   { to: '/materials', icon: '🧶', label: 'Materials',  adminOnly: true  },
   { to: '/production',icon: '⚙️', label: 'Production', adminOnly: false },
   { to: '/orders',    icon: '📦', label: 'Orders',     adminOnly: true  },
-  { to: '/workers',   icon: '👷', label: 'Workers',    adminOnly: true  },
+  { to: '/workers',   icon: '👷', label: 'Workers',    managerOnly: true },
   { to: '/reports',   icon: '📈', label: 'Reports',    adminOnly: true  },
   { to: '/payments',  icon: '💰', label: 'Payments',   adminOnly: true  },
   { to: '/expenses',  icon: '💸', label: 'Expenses',   adminOnly: true  },
@@ -25,8 +25,9 @@ export default function Sidebar({ onClose }) {
     navigate('/login');
   };
 
-  const isAdmin = ['owner', 'admin', 'super_admin'].includes(user?.role);
-  const isOwner = ['owner', 'super_admin'].includes(user?.role);
+  const isAdmin   = ['owner', 'admin', 'super_admin'].includes(user?.role);
+  const isManager = ['owner', 'admin', 'vendor', 'subvendor', 'super_admin'].includes(user?.role);
+  const isOwner   = ['owner', 'super_admin'].includes(user?.role);
 
   const items = [...navItems];
   if (isOwner) {
@@ -42,7 +43,11 @@ export default function Sidebar({ onClose }) {
     items.push({ to: '/super-admin', icon: '👑', label: 'Super Admin', adminOnly: false });
   }
 
-  const visibleItems = items.filter(item => !item.adminOnly || isAdmin);
+  const visibleItems = items.filter(item => {
+    if (item.managerOnly) return isManager;
+    if (item.adminOnly) return isAdmin;
+    return true;
+  });
 
   return (
     <div className="flex flex-col h-full bg-gradient-to-b from-brand-900 to-brand-800 text-white w-64 flex-shrink-0">

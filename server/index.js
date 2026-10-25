@@ -42,8 +42,11 @@ app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 app.use('/api/auth',       require('./routes/auth'));
 
 // Multi-tenant routes
-app.use('/api/tenants',    require('./routes/tenants'));
-app.use('/api/billing',    require('./routes/billing'));
+app.use('/api/tenants',     require('./routes/tenants'));
+app.use('/api/invitations', require('./routes/invitations'));
+app.use('/api/suppliers',   require('./routes/suppliers'));
+app.use('/api/warehouses',  require('./routes/warehouses'));
+app.use('/api/billing',     require('./routes/billing'));
 app.use('/api/super-admin', require('./routes/super-admin'));
 
 // Tenant business data routes (all internally scoped by tenant_id via JWT)
@@ -57,9 +60,11 @@ app.use('/api/payouts',    require('./routes/payouts'));
 app.use('/api/reports',    require('./routes/reports'));
 app.use('/api/settings',   require('./routes/settings'));
 app.use('/api/stock',      require('./routes/stock'));
-app.use('/api/todos',      require('./routes/todos'));
-app.use('/api/expenses',   require('./routes/expenses'));
-app.use('/api/payments',   require('./routes/payments'));
+app.use('/api/todos',         require('./routes/todos'));
+app.use('/api/expenses',      require('./routes/expenses'));
+app.use('/api/payments',      require('./routes/payments'));
+app.use('/api/notifications', require('./routes/notifications'));
+app.use('/api/audit-logs',    require('./routes/audit-logs'));
 
 // ─── Platform connector status ────────────────────────────────────────────────
 const connectors = {
@@ -86,10 +91,12 @@ app.use((err, req, res, _next) => {
 
 const { initAutoBackupScheduler } = require('./services/backup.service');
 
-app.listen(PORT, () => {
-  console.log(`\n🧶 Knotique Server running on http://localhost:${PORT}`);
-  console.log(`   Health check: http://localhost:${PORT}/api/health\n`);
-  initAutoBackupScheduler();
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`\n🧶 Knotique Server running on http://localhost:${PORT}`);
+    console.log(`   Health check: http://localhost:${PORT}/api/health\n`);
+    initAutoBackupScheduler();
+  });
+}
 
 module.exports = app;

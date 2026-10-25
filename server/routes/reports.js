@@ -1,10 +1,10 @@
 const router = require('express').Router();
 const db = require('../db/database');
-const { authenticate, adminOnly } = require('../middleware/auth');
+const { authenticate, adminOnly, requireTenant } = require('../middleware/auth');
 const { calculateCOGS } = require('../services/cost.service');
 const xlsx = require('xlsx');
 
-router.use(authenticate, adminOnly);
+router.use(authenticate, requireTenant, adminOnly);
 
 // GET /api/reports/dashboard
 router.get('/dashboard', async (req, res) => {

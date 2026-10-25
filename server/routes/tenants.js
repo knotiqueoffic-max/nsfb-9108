@@ -1,8 +1,11 @@
 const router = require('express').Router();
 const db = require('../db/database');
-const { authenticate, ownerOnly } = require('../middleware/auth');
+const { authenticate, ownerOnly, requireTenant, workerManagerOnly } = require('../middleware/auth');
+const { ROLES, TENANT_TYPES, RELATIONSHIP_TYPES } = require('../constants/roles');
+const { logAuditEvent } = require('../services/audit.service');
 
 router.use(authenticate);
+router.use(requireTenant);
 
 // ─── GET /api/tenants/me — current tenant profile ─────────────────────────────
 router.get('/me', async (req, res) => {
@@ -25,6 +28,17 @@ router.put('/me', ownerOnly, async (req, res) => {
   await db('tenants').where('id', req.tenant_id).update(updateData);
   const tenant = await db('tenants').where('id', req.tenant_id).first();
   const plan = await db('plans').where('id', tenant.plan_id).first();
+
+  await logAuditEvent({
+    tenant_id: req.tenant_id,
+    user_id: req.user.id,
+    action: 'TENANT_PROFILE_UPDATED',
+    target_type: 'tenants',
+    target_id: req.tenant_id,
+    ip_address: req.ip,
+    details: updateData,
+  });
+
   res.json({ ...tenant, plan });
 });
 
@@ -107,4 +121,107 @@ router.get('/me/billing', ownerOnly, async (req, res) => {
   });
 });
 
+// ─── POST /api/tenants/subvendors — create a subvendor under current tenant ──
+router.post('/subvendors', workerManagerOnly, async (req, res) => {
+  const { name, business_category } = req.body;
+  if (!name || !name.trim()) {
+    return res.status(400).json({ error: 'Subvendor organization name is required' });
+  }
+
+  // Generate unique slug
+  let baseSlug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'subvendor';
+  let slug = baseSlug;
+  let slugSuffix = 1;
+  while (await db('tenants').where('slug', slug).first()) {
+    slug = `${baseSlug}-${slugSuffix++}`;
+  }
+
+  const trialEndsAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
+
+  const result = await db.transaction(async (trx) => {
+    // 1. Create subvendor tenant record
+    const [subvendorId] = await trx('tenants').insert({
+      name:                name.trim(),
+      slug,
+      business_category:   business_category || 'Handmade Production',
+      plan_id:             'free_trial',
+      trial_ends_at:       trialEndsAt,
+      subscription_status: 'active', // subvendors do not require standalone paid subscription
+      tenant_type:         TENANT_TYPES.SUBVENDOR,
+      parent_tenant_id:    req.tenant_id,
+      status:              'active',
+      onboarding_dismissed: true,
+    }).returning('id');
+    const resolvedSubvendorId = typeof subvendorId === 'object' ? subvendorId.id : subvendorId;
+
+    // 2. Register organization relationship
+    await trx('organization_relationships').insert({
+      parent_tenant_id:  req.tenant_id,
+      child_tenant_id:   resolvedSubvendorId,
+      relationship_type: RELATIONSHIP_TYPES.VENDOR_SUBVENDOR,
+      status:            'active',
+    });
+
+    return resolvedSubvendorId;
+  });
+
+  const createdSubvendor = await db('tenants').where('id', result).first();
+
+  await logAuditEvent({
+    tenant_id: req.tenant_id,
+    user_id: req.user.id,
+    action: 'SUBVENDOR_ORGANIZATION_CREATED',
+    target_type: 'tenants',
+    target_id: result,
+    ip_address: req.ip,
+    details: { name, slug },
+  });
+
+  res.status(201).json({
+    message: 'Subvendor organization created successfully',
+    subvendor: createdSubvendor,
+  });
+});
+
+// ─── GET /api/tenants/subvendors — list subvendor organizations ───────────────
+router.get('/subvendors', workerManagerOnly, async (req, res) => {
+  const subvendors = await db('tenants')
+    .where('parent_tenant_id', req.tenant_id)
+    .where('tenant_type', TENANT_TYPES.SUBVENDOR)
+    .select('id', 'name', 'slug', 'business_category', 'status', 'created_at');
+
+  res.json(subvendors);
+});
+
+// ─── GET /api/tenants/relationships — list all organization relationships ──────
+router.get('/relationships', async (req, res) => {
+  const relationships = await db('organization_relationships')
+    .where('parent_tenant_id', req.tenant_id)
+    .orWhere('child_tenant_id', req.tenant_id)
+    .select('id', 'parent_tenant_id', 'child_tenant_id', 'relationship_type', 'status', 'created_at');
+
+  // Enrich with tenant names
+  const tenantIds = new Set();
+  relationships.forEach(r => {
+    tenantIds.add(r.parent_tenant_id);
+    tenantIds.add(r.child_tenant_id);
+  });
+
+  const tenants = await db('tenants')
+    .whereIn('id', Array.from(tenantIds))
+    .select('id', 'name', 'tenant_type', 'status');
+
+  const tenantMap = {};
+  tenants.forEach(t => { tenantMap[t.id] = t; });
+
+  const enriched = relationships.map(r => ({
+    ...r,
+    parent_tenant: tenantMap[r.parent_tenant_id] || null,
+    child_tenant:  tenantMap[r.child_tenant_id] || null,
+  }));
+
+  res.json(enriched);
+});
+
 module.exports = router;
+
