@@ -1,0 +1,12 @@
+{
+  "verbose": false,
+  "ignore": [
+    "*.db",
+    "*.db-journal",
+    "knotique.db",
+    "db/knotique.db",
+    "uploads/*",
+    "node_modules/*"
+  ],
+  "ext": "js,json"
+}
