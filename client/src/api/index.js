@@ -1,7 +1,17 @@
 import axios from 'axios';
 
+// Resolve API base URL: defaults to relative '/api' (useful with Netlify proxy or dev server),
+// or points to an external hosted backend (e.g. Render/Railway) via VITE_API_URL.
+const rawApiUrl = import.meta.env.VITE_API_URL;
+let resolvedBaseUrl = '/api';
+
+if (rawApiUrl && typeof rawApiUrl === 'string') {
+  const trimmed = rawApiUrl.replace(/\/+$/, '');
+  resolvedBaseUrl = trimmed.endsWith('/api') ? trimmed : `${trimmed}/api`;
+}
+
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: resolvedBaseUrl,
   timeout: 30000,
 });
 

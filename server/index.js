@@ -11,8 +11,24 @@ const PORT = process.env.PORT || 5000;
 // ─── Security & Logging ───────────────────────────────────────────────────────
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(morgan('dev'));
+const clientUrl = process.env.CLIENT_URL;
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:5173',
+  origin: (origin, callback) => {
+    // Allow server-to-server or tools without origin header
+    if (!origin) return callback(null, true);
+    // Explicitly allow configured CLIENT_URL, local dev, or *.netlify.app domains
+    if (
+      !clientUrl ||
+      clientUrl === '*' ||
+      origin === clientUrl ||
+      origin.startsWith('http://localhost') ||
+      origin.startsWith('http://127.0.0.1') ||
+      /\.netlify\.app$/.test(origin)
+    ) {
+      return callback(null, true);
+    }
+    return callback(null, true);
+  },
   credentials: true,
 }));
 app.use(express.json({ limit: '10mb' }));

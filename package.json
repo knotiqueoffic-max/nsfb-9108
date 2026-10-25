@@ -4,6 +4,8 @@
   "description": "Knotique — Handmade Crochet Business Management App",
   "private": true,
   "scripts": {
+    "build": "cd client && npm install && npm run build",
+    "start": "cd server && npm start",
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\" --names \"SERVER,CLIENT\" --prefix-colors \"cyan,magenta\"",
     "dev:server": "cd server && npm run dev",
     "dev:client": "cd client && npm run dev",

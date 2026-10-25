@@ -23,7 +23,9 @@ export default function Login() {
       navigate('/');
     },
     onError: (err) => {
-      const msg = err?.response?.data?.error || err?.response?.data?.message || 'Invalid email or password.';
+      const msg = !err.response && err.message
+        ? `Cannot reach backend server. Please check connection (${err.message})`
+        : (err?.response?.data?.error || err?.response?.data?.message || 'Invalid email or password.');
       toast.error(msg);
     },
   });

@@ -1,0 +1,18 @@
+# Render Blueprint specification for Knotique Backend API
+services:
+  - type: web
+    name: knotique-backend
+    env: node
+    plan: free
+    rootDir: server
+    buildCommand: npm install && npm run migrate
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 5000
+      - key: CLIENT_URL
+        value: https://*.netlify.app
+      - key: JWT_SECRET
+        generateValue: true
