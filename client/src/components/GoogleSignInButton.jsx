@@ -75,6 +75,9 @@ export default function GoogleSignInButton({ planId = 'free_trial' }) {
             mutation.mutate(response.credential);
           }
         },
+        error_callback: (err) => {
+          console.warn('Google Identity Services notice:', err);
+        },
         auto_select: false,
         cancel_on_tap_outside: true,
       });

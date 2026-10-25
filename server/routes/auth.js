@@ -263,8 +263,8 @@ router.post('/google-login', async (req, res) => {
     }
 
     // 3. Brand new user signup via Google: create tenant and user account
-    // Generate company name based on name
-    const company_name = `${name}'s Workspace`;
+    const displayName = name || email?.split('@')[0] || 'Craftisan';
+    const company_name = `${displayName}'s Workspace`;
     let baseSlug = company_name
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')

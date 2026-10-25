@@ -44,8 +44,8 @@ async function verifyGoogleToken(token) {
       googleProfilePhoto: payload['picture'],
     };
   } catch (err) {
-    console.error('Google ID Token verification failed:', err);
-    throw new Error('Invalid Google ID token signature.');
+    console.error('Google ID Token verification failed:', err.message);
+    throw new Error(`Google token verification failed: ${err.message}`);
   }
 }
 
