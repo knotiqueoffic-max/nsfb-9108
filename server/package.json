@@ -9,7 +9,8 @@
     "migrate": "knex migrate:latest",
     "migrate:rollback": "knex migrate:rollback",
     "seed": "knex seed:run",
-    "migrate:make": "knex migrate:make"
+    "migrate:make": "knex migrate:make",
+    "test": "node test_auth_flow.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

@@ -95,14 +95,26 @@ export default function Signup() {
   });
 
   const mutation = useMutation({
-    mutationFn: (data) => api.post('/auth/signup', data).then((r) => r.data),
+    mutationFn: async (data) => {
+      const res = await api.post('/auth/signup', data);
+      const resData = res?.data;
+      if (!resData || typeof resData !== 'object' || !resData.token || !resData.user || !resData.user.id) {
+        throw new Error('Server returned an invalid registration response.');
+      }
+      return resData;
+    },
     onSuccess: ({ token, user }) => {
-      login(token, user);
-      toast.success(`Welcome to Knotique, ${user.name}! Your workspace is ready.`);
-      navigate('/');
+      const ok = login(token, user);
+      if (ok) {
+        toast.success(`Welcome to Knotique, ${user.name}! Your workspace is ready.`);
+        navigate('/');
+      } else {
+        toast.error('Account created, but session could not be established. Please sign in.');
+        navigate('/login');
+      }
     },
     onError: (err) => {
-      const msg = err?.response?.data?.error || 'Registration failed. Please try again.';
+      const msg = err?.response?.data?.error || err?.message || 'Registration failed. Please try again.';
       toast.error(msg);
     },
   });

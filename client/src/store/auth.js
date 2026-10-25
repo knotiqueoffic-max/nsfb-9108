@@ -1,21 +1,42 @@
 import { create } from 'zustand';
 
+const getStoredToken = () => {
+  try {
+    const t = localStorage.getItem('knotique_token');
+    return t && t !== 'undefined' && t !== 'null' && typeof t === 'string' && t.trim().length > 0 ? t : null;
+  } catch {
+    return null;
+  }
+};
+
 const getStoredUser = () => {
   try {
     const u = localStorage.getItem('knotique_user');
-    return u ? JSON.parse(u) : null;
-  } catch { return null; }
+    if (!u || u === 'undefined' || u === 'null') return null;
+    const parsed = JSON.parse(u);
+    return parsed && typeof parsed === 'object' && parsed.id ? parsed : null;
+  } catch {
+    return null;
+  }
 };
 
+const initialToken = getStoredToken();
+const initialUser = getStoredUser();
+
 export const useAuthStore = create((set) => ({
-  user:            getStoredUser(),
-  token:           localStorage.getItem('knotique_token'),
-  isAuthenticated: !!localStorage.getItem('knotique_token'),
+  user:            initialUser,
+  token:           initialToken,
+  isAuthenticated: !!(initialToken && initialUser),
 
   login: (token, user) => {
+    if (!token || typeof token !== 'string' || token.trim().length === 0 || !user || typeof user !== 'object' || !user.id) {
+      console.error('[AuthStore] Login rejected: invalid token or user payload', { hasToken: !!token, hasUser: !!user });
+      return false;
+    }
     localStorage.setItem('knotique_token', token);
     localStorage.setItem('knotique_user', JSON.stringify(user));
     set({ token, user, isAuthenticated: true });
+    return true;
   },
 
   logout: () => {

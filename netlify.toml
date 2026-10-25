@@ -9,18 +9,18 @@
 [build.environment]
   NODE_VERSION = "20"
 
-# Optional: If you host your backend on Render, Railway, Fly.io, etc.,
-# you can either:
-# Option 1: Set VITE_API_URL in Netlify Environment Variables (e.g. https://your-backend.onrender.com)
-# Option 2: Uncomment the rewrite below to proxy /api/* directly through Netlify without CORS:
-# [[redirects]]
-#   from = "/api/*"
-#   to = "https://YOUR_BACKEND_URL/api/:splat"
-#   status = 200
-#   force = true
+# Reverse-proxy /api/* directly through Netlify to the backend API.
+# This eliminates CORS preflight issues, avoids hardcoding URLs in the JS bundle,
+# and guarantees /api/* requests cannot accidentally fall through to index.html.
+[[redirects]]
+  from = "/api/*"
+  to = "https://knotique-backend.onrender.com/api/:splat"
+  status = 200
+  force = true
 
 # Single Page Application (SPA) routing fallback for React Router
 [[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
+

@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 const { body, validationResult } = require('express-validator');
 const db = require('../db/database');
 const { generateToken, authenticate, adminOnly } = require('../middleware/auth');
-const { verifyGoogleToken } = require('../services/google.service');
+const { verifyGoogleToken, getGoogleClientId, GoogleAuthError } = require('../services/google.service');
 
 // ─── Helper: build tenant-enriched user object ────────────────────────────────
 async function buildUserResponse(user) {
@@ -206,28 +206,48 @@ router.put('/change-password', authenticate, [
 // ─── GET /api/auth/config ─────────────────────────────────────────────────────
 router.get('/config', (req, res) => {
   res.json({
-    googleClientId: process.env.GOOGLE_CLIENT_ID || null,
+    googleClientId: getGoogleClientId() || null,
   });
 });
 
 // ─── POST /api/auth/google-login ──────────────────────────────────────────────
 router.post('/google-login', async (req, res) => {
   const { token, plan_id = 'free_trial' } = req.body;
-  if (!token) return res.status(400).json({ error: 'Google ID token is required' });
+  if (!token || typeof token !== 'string') {
+    return res.status(400).json({ error: 'Google ID token is required' });
+  }
+
+  // Validate plan_id against known plans
+  const ALLOWED_PLANS = ['free_trial', 'starter', 'growth', 'business'];
+  const resolvedPlanId = ALLOWED_PLANS.includes(plan_id) ? plan_id : 'free_trial';
+
+  let googleUser;
+  try {
+    googleUser = await verifyGoogleToken(token);
+  } catch (err) {
+    if (err instanceof GoogleAuthError || err.isAuthError) {
+      return res.status(401).json({ error: err.message || 'Invalid or expired Google token' });
+    }
+    console.error('[Google OAuth Verification Error]:', err);
+    return res.status(500).json({ error: 'Failed to verify Google token. Please try again.' });
+  }
+
+  const { googleId, email, name, googleProfilePhoto } = googleUser;
 
   try {
-    const { googleId, email, name, googleProfilePhoto } = await verifyGoogleToken(token);
-
     // 1. Check if user already exists by googleId
     let user = await db('users').where('google_id', googleId).where('is_active', true).first();
 
     if (user) {
-      // Existing Google user: update profile photo just in case and log in
-      await db('users').where('id', user.id).update({
-        google_profile_photo: googleProfilePhoto || user.google_profile_photo,
-      });
+      // Existing Google user: update profile photo if a new one is provided and log in
+      const photoToUpdate = googleProfilePhoto || user.google_profile_photo;
+      if (googleProfilePhoto && googleProfilePhoto !== user.google_profile_photo) {
+        await db('users').where('id', user.id).update({
+          google_profile_photo: photoToUpdate,
+        });
+      }
       const knotiqueToken = generateToken(user);
-      const userResponse = await buildUserResponse({ ...user, google_profile_photo: googleProfilePhoto });
+      const userResponse = await buildUserResponse({ ...user, google_profile_photo: photoToUpdate });
       return res.json({ token: knotiqueToken, user: userResponse });
     }
 
@@ -235,20 +255,21 @@ router.post('/google-login', async (req, res) => {
     user = await db('users').where('email', email).where('is_active', true).first();
 
     if (user) {
-      // Existing email/password user: link Google login
+      // Worker accounts are not allowed to use Google sign-in
       if (user.role === 'worker') {
         return res.status(403).json({ error: 'Worker accounts must log in with email and password' });
       }
 
       // Link accounts
-      const currentMethods = user.auth_methods ? user.auth_methods.split(',') : ['email_password'];
+      const currentMethods = user.auth_methods ? user.auth_methods.split(',').map((m) => m.trim()) : ['email_password'];
       if (!currentMethods.includes('google')) {
         currentMethods.push('google');
       }
 
+      const photoToUpdate = googleProfilePhoto || user.google_profile_photo;
       await db('users').where('id', user.id).update({
         google_id:            googleId,
-        google_profile_photo: googleProfilePhoto,
+        google_profile_photo: photoToUpdate,
         auth_methods:         currentMethods.join(','),
       });
 
@@ -262,13 +283,13 @@ router.post('/google-login', async (req, res) => {
       });
     }
 
-    // 3. Brand new user signup via Google: create tenant and user account
-    const displayName = name || email?.split('@')[0] || 'Craftisan';
+    // 3. Brand new user signup via Google: create tenant and user account atomically
+    const displayName = (name && name.trim()) || email?.split('@')[0] || 'Craftisan';
     const company_name = `${displayName}'s Workspace`;
     let baseSlug = company_name
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '');
+      .replace(/^-|-$/g, '') || 'workspace';
 
     let slug = baseSlug;
     let slugSuffix = 1;
@@ -284,23 +305,23 @@ router.post('/google-login', async (req, res) => {
         name:                company_name,
         slug,
         business_category:   'Crochet & Knitting',
-        plan_id:             plan_id,
+        plan_id:             resolvedPlanId,
         trial_ends_at:       trialEndsAt,
         subscription_status: 'trialing',
         onboarding_dismissed: false,
       }).returning('id');
       const resolvedTenantId = typeof tenantId === 'object' ? tenantId.id : tenantId;
 
-      // Create owner user linked with Google
+      // Create owner user linked with Google — using displayName fallback for name
       const [userId] = await trx('users').insert({
         tenant_id:            resolvedTenantId,
-        name,
-        email,
+        name:                 displayName,
+        email:                email.toLowerCase(),
         password_hash:        null, // google-only user has no password initially
         role:                 'owner',
         is_active:            true,
         google_id:            googleId,
-        google_profile_photo: googleProfilePhoto,
+        google_profile_photo: googleProfilePhoto || null,
         auth_methods:         'google',
       }).returning('id');
       const resolvedUserId = typeof userId === 'object' ? userId.id : userId;
@@ -330,8 +351,8 @@ router.post('/google-login', async (req, res) => {
     return res.status(201).json({ token: knotiqueToken, user: userResponse });
 
   } catch (err) {
-    console.error('Google Sign-in error:', err);
-    res.status(500).json({ error: err.message || 'Failed to authenticate with Google.' });
+    console.error('[Google Sign-in Server Error]:', err);
+    res.status(500).json({ error: 'Failed to authenticate with Google. Please try again.' });
   }
 });
 

@@ -12,7 +12,8 @@
     "setup": "npm install && cd server && npm install && cd ../client && npm install",
     "migrate": "cd server && npm run migrate",
     "seed": "cd server && npm run seed",
-    "init": "npm run setup && npm run migrate && npm run seed"
+    "init": "npm run setup && npm run migrate && npm run seed",
+    "test": "cd server && npm test"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

@@ -18,16 +18,27 @@ export default function Login() {
   } = useForm();
 
   const mutation = useMutation({
-    mutationFn: (data) => api.post('/auth/login', data).then(r => r.data),
+    mutationFn: async (data) => {
+      const res = await api.post('/auth/login', data);
+      const resData = res?.data;
+      if (!resData || typeof resData !== 'object' || !resData.token || !resData.user || !resData.user.id) {
+        throw new Error('Server returned an invalid authentication response.');
+      }
+      return resData;
+    },
     onSuccess: ({ token, user }) => {
-      login(token, user);
-      toast.success(`Welcome back, ${user.name}!`);
-      navigate('/');
+      const ok = login(token, user);
+      if (ok) {
+        toast.success(`Welcome back, ${user.name}!`);
+        navigate('/');
+      } else {
+        toast.error('Failed to establish session. Please try again.');
+      }
     },
     onError: (err) => {
       const msg = !err.response && err.message
         ? `Cannot reach backend server. Please check connection (${err.message})`
-        : (err?.response?.data?.error || err?.response?.data?.message || 'Invalid email or password.');
+        : (err?.response?.data?.error || err?.response?.data?.message || err?.message || 'Invalid email or password.');
       toast.error(msg);
     },
   });

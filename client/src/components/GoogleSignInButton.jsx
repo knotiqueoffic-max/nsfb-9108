@@ -11,39 +11,63 @@ export default function GoogleSignInButton({ planId = 'free_trial' }) {
   const navigate = useNavigate();
   const { login } = useAuthStore();
   const googleBtnRef = useRef(null);
+  const isSubmittingRef = useRef(false);
   const [clientId, setClientId] = useState(
     import.meta.env.VITE_GOOGLE_CLIENT_ID || FALLBACK_CLIENT_ID
   );
   const [isGsiReady, setIsGsiReady] = useState(false);
 
   const mutation = useMutation({
-    mutationFn: (token) => api.post('/auth/google-login', { token, plan_id: planId }).then((r) => r.data),
-    onSuccess: (data) => {
-      login(data.token, data.user);
-      if (data.message) {
-        toast.success(data.message);
-      } else {
-        toast.success(`Welcome, ${data.user.name}!`);
+    mutationFn: async (token) => {
+      if (!token || typeof token !== 'string') {
+        throw new Error('Google credential was not provided.');
       }
-      navigate('/');
+      const res = await api.post('/auth/google-login', { token, plan_id: planId });
+      const data = res?.data;
+      if (!data || typeof data !== 'object' || !data.token || !data.user || !data.user.id) {
+        throw new Error('Server returned an invalid authentication response.');
+      }
+      return data;
+    },
+    onSuccess: (data) => {
+      isSubmittingRef.current = false;
+      const ok = login(data.token, data.user);
+      if (ok) {
+        if (data.message) {
+          toast.success(data.message);
+        } else {
+          toast.success(`Welcome, ${data.user.name || 'User'}!`);
+        }
+        navigate('/');
+      } else {
+        toast.error('Failed to establish session. Please try again.');
+      }
     },
     onError: (err) => {
-      const msg = err?.response?.data?.error || 'Google Sign-in failed. Please try again.';
+      isSubmittingRef.current = false;
+      const msg =
+        err?.response?.data?.error ||
+        err?.message ||
+        'Google Sign-in failed. Please try again.';
       toast.error(msg);
     },
   });
 
   // Fetch client ID from server config if available
   useEffect(() => {
+    let isMounted = true;
     api.get('/auth/config')
       .then((res) => {
-        if (res.data?.googleClientId) {
+        if (isMounted && res.data?.googleClientId) {
           setClientId(res.data.googleClientId);
         }
       })
       .catch(() => {
         // Fallback to preconfigured client ID
       });
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   // Poll / check until window.google.accounts.id is available
@@ -71,12 +95,17 @@ export default function GoogleSignInButton({ planId = 'free_trial' }) {
       window.google.accounts.id.initialize({
         client_id: clientId,
         callback: (response) => {
-          if (response?.credential) {
-            mutation.mutate(response.credential);
+          if (mutation.isPending || isSubmittingRef.current) return;
+          const credential = response?.credential;
+          if (credential && typeof credential === 'string') {
+            isSubmittingRef.current = true;
+            mutation.mutate(credential);
+          } else {
+            toast.error('Google sign-in did not return a valid credential.');
           }
         },
         error_callback: (err) => {
-          console.warn('Google Identity Services notice:', err);
+          console.warn('[Google Identity Services notice]:', err);
         },
         auto_select: false,
         cancel_on_tap_outside: true,
@@ -94,9 +123,16 @@ export default function GoogleSignInButton({ planId = 'free_trial' }) {
     } catch (err) {
       console.error('Google button rendering error:', err);
     }
+
+    return () => {
+      try {
+        window.google?.accounts?.id?.cancel();
+      } catch {}
+    };
   }, [isGsiReady, clientId]);
 
   const handleManualClick = () => {
+    if (mutation.isPending || isSubmittingRef.current) return;
     if (!window.google?.accounts?.id) {
       toast.loading('Loading Google authentication...', { duration: 1500 });
       return;

@@ -22,17 +22,38 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// Global response error handler
+// Global response handler
 api.interceptors.response.use(
-  (res) => res,
+  (res) => {
+    // Detect accidental HTML responses (e.g. Netlify SPA fallback when backend API is unreachable)
+    const contentType = res.headers?.['content-type'] || '';
+    if (
+      typeof res.data === 'string' &&
+      (contentType.includes('text/html') || res.data.trim().startsWith('<!DOCTYPE') || res.data.trim().startsWith('<html'))
+    ) {
+      const error = new Error('Received an HTML page instead of JSON API response. The backend server may be unreachable.');
+      error.response = res;
+      return Promise.reject(error);
+    }
+    return res;
+  },
   (err) => {
     const status = err.response?.status;
+    const reqUrl = err.config?.url || '';
+    const isAuthRoute =
+      reqUrl.includes('/auth/login') ||
+      reqUrl.includes('/auth/google-login') ||
+      reqUrl.includes('/auth/signup') ||
+      reqUrl.includes('/auth/config');
 
-    // 401 — token expired or invalid: force re-login
-    if (status === 401) {
+    // 401 — token expired or invalid: force re-login only for protected application requests.
+    // Never hijack authentication endpoint errors to avoid full-page redirect loops.
+    if (status === 401 && !isAuthRoute) {
       localStorage.removeItem('knotique_token');
       localStorage.removeItem('knotique_user');
-      window.location.href = '/login';
+      if (window.location.pathname !== '/login' && window.location.pathname !== '/signup') {
+        window.location.href = '/login';
+      }
       return Promise.reject(err);
     }
 
