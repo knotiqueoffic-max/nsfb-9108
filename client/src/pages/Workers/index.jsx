@@ -68,10 +68,10 @@ function WorkerModal({ worker, onClose }) {
       : api.post('/workers', data).then(r => r.data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['workers'] });
-      toast.success(isEdit ? 'Worker updated!' : 'Worker added!');
+      toast.success(isEdit ? 'Crocheter updated!' : 'Crocheter added!');
       onClose();
     },
-    onError: (e) => toast.error(e?.response?.data?.error || 'Failed to save worker.'),
+    onError: (e) => toast.error(e?.response?.data?.error || 'Failed to save crocheter.'),
   });
 
   const onSubmit = (data) => {
@@ -84,7 +84,7 @@ function WorkerModal({ worker, onClose }) {
   };
 
   return (
-    <Modal title={isEdit ? `Edit — ${worker.name}` : 'Add Worker'} onClose={onClose}>
+    <Modal title={isEdit ? `Edit — ${worker.name}` : 'Add Crocheter'} onClose={onClose}>
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         <div>
           <label className="label">Full Name *</label>
@@ -489,13 +489,13 @@ export default function WorkersPage() {
 
   const workers = workersData?.workers ?? workersData ?? [];
 
-  const isAdmin = ['owner', 'admin', 'super_admin'].includes(authUser?.role);
+  const isManager = ['owner', 'admin', 'vendor', 'subvendor', 'super_admin'].includes(authUser?.role);
 
-  if (!isAdmin) {
+  if (!isManager) {
     return (
       <div className="card text-center py-16">
         <p className="text-4xl mb-3">🔒</p>
-        <p className="text-slate-600 font-medium">Admin access required.</p>
+        <p className="text-slate-600 font-medium">Manager access required.</p>
         <p className="text-slate-400 text-sm mt-1">You do not have permission to view this page.</p>
       </div>
     );
@@ -513,16 +513,16 @@ export default function WorkersPage() {
     <div className="space-y-8">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-slate-800">Workers</h1>
-          <p className="text-slate-500 text-sm mt-0.5">Manage team members and payouts</p>
+          <h1 className="text-2xl font-bold text-slate-800">Crocheters</h1>
+          <p className="text-slate-500 text-sm mt-0.5">Manage crocheters, piecework rates, and payouts</p>
         </div>
-        <button onClick={handleAddWorker} className="btn-primary">+ Add Worker</button>
+        <button onClick={handleAddWorker} className="btn-primary">+ Add Crocheter</button>
       </div>
 
       {isLoading ? <Spinner /> : workers.length === 0 ? (
         <div className="card text-center py-16">
-          <p className="text-4xl mb-3">👥</p>
-          <p className="text-slate-500">No workers yet. Add your first team member!</p>
+          <p className="text-4xl mb-3">🧶</p>
+          <p className="text-slate-500">No crocheters yet. Add your first team member!</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -533,7 +533,7 @@ export default function WorkersPage() {
               onEdit={(wk) => setWorkerModal(wk)}
               onToggle={(wk) => toggleMutation.mutate(wk)}
               onDelete={(wk) => {
-                if (window.confirm(`Delete worker "${wk.name}"?`)) {
+                if (window.confirm(`Delete crocheter "${wk.name}"?`)) {
                   deleteWorkerMutation.mutate(wk.id);
                 }
               }}
@@ -557,8 +557,8 @@ export default function WorkersPage() {
       {showUpgrade && (
         <UpgradePrompt
           onClose={() => setShowUpgrade(false)}
-          title="Worker Limit Reached"
-          message={`Your current plan allows up to ${plan?.max_workers} active workers. Upgrade toGrowth or Business to expand your production team.`}
+          title="Crocheter Limit Reached"
+          message={`Your current plan allows up to ${plan?.max_workers} active crocheters. Upgrade to Growth or Business to expand your production team.`}
           limitKey="workers"
           currentLimit={plan?.max_workers}
         />

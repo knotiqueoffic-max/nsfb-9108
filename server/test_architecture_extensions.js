@@ -419,7 +419,7 @@ async function runTests() {
     }).returning('id');
     const productId = typeof pId === 'object' ? pId.id : pId;
 
-    // 2. Worker logs piecework production
+    // 2. Crocheter/Worker independent production logging rejected with 403
     const workerProdRes = await request('/api/production', {
       method: 'POST',
       headers: { Authorization: `Bearer ${workerAToken}` },
@@ -429,10 +429,24 @@ async function runTests() {
         production_date: new Date().toISOString().split('T')[0],
       },
     });
-    assert.strictEqual(workerProdRes.status, 201, 'Worker can log their piecework');
-    assert.strictEqual(workerProdRes.body.entry.worker_id, workerAUser.id);
-    assert.strictEqual(workerProdRes.body.entry.labor_cost, 75, 'Wage rate (15 * 5 = 75)');
-    console.log('  ✓ Worker logged production piecework entry successfully');
+    assert.strictEqual(workerProdRes.status, 403, 'Crocheter independent production creation must be rejected with 403');
+    console.log('  ✓ Crocheter independent production creation forbidden (HTTP 403)');
+
+    // 2b. Manager logs production piecework entry for the worker
+    const managerProdRes = await request('/api/production', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${ownerAToken}` },
+      body: {
+        product_id: productId,
+        worker_id: workerAUser.id,
+        quantity: 5,
+        production_date: new Date().toISOString().split('T')[0],
+      },
+    });
+    assert.strictEqual(managerProdRes.status, 201, 'Manager logs production entry for worker');
+    assert.strictEqual(managerProdRes.body.entry.worker_id, workerAUser.id);
+    assert.strictEqual(managerProdRes.body.entry.labor_cost, 75, 'Wage rate (15 * 5 = 75)');
+    console.log('  ✓ Manager logged production piecework entry for crocheter successfully');
 
     // 3. Worker queries production (should only see their own)
     const workerViewRes = await request('/api/production', {

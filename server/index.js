@@ -52,9 +52,10 @@ app.use('/api/super-admin', require('./routes/super-admin'));
 // Tenant business data routes (all internally scoped by tenant_id via JWT)
 app.use('/api/materials',  require('./routes/materials'));
 app.use('/api/purchases',  require('./routes/purchases'));
-app.use('/api/products',   require('./routes/products'));
-app.use('/api/production', require('./routes/production'));
-app.use('/api/workers',    require('./routes/workers'));
+app.use('/api/products',            require('./routes/products'));
+app.use('/api/production',          require('./routes/production'));
+app.use('/api/production-requests', require('./routes/production-requests'));
+app.use('/api/workers',             require('./routes/workers'));
 app.use('/api/orders',     require('./routes/orders'));
 app.use('/api/payouts',    require('./routes/payouts'));
 app.use('/api/reports',    require('./routes/reports'));

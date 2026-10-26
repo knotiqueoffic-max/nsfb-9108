@@ -3,17 +3,18 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../store/auth';
 
 const navItems = [
-  { to: '/',          icon: '📊', label: 'Dashboard',  adminOnly: false },
-  { to: '/products',  icon: '🧸', label: 'Products',   adminOnly: false },
-  { to: '/materials', icon: '🧶', label: 'Materials',  adminOnly: true  },
-  { to: '/production',icon: '⚙️', label: 'Production', adminOnly: false },
-  { to: '/orders',    icon: '📦', label: 'Orders',     adminOnly: true  },
-  { to: '/workers',   icon: '👷', label: 'Workers',    managerOnly: true },
-  { to: '/reports',   icon: '📈', label: 'Reports',    adminOnly: true  },
-  { to: '/payments',  icon: '💰', label: 'Payments',   adminOnly: true  },
-  { to: '/expenses',  icon: '💸', label: 'Expenses',   adminOnly: true  },
-  { to: '/todos',     icon: '📋', label: 'To-Do List', adminOnly: true  },
-  { to: '/settings',  icon: '⚙️', label: 'Settings',  adminOnly: true  },
+  { to: '/',                    icon: '📊', label: 'Dashboard',           adminOnly: false },
+  { to: '/production-requests', icon: '📝', label: 'Production Requests', adminOnly: false },
+  { to: '/production',          icon: '⚙️', label: 'Production',          adminOnly: false },
+  { to: '/products',            icon: '🧸', label: 'Products',            adminOnly: false },
+  { to: '/materials',           icon: '🧶', label: 'Materials',           adminOnly: true  },
+  { to: '/orders',              icon: '📦', label: 'Orders',              adminOnly: true  },
+  { to: '/workers',             icon: '🧶', label: 'Crocheters',          managerOnly: true },
+  { to: '/reports',             icon: '📈', label: 'Reports',             adminOnly: true  },
+  { to: '/payments',            icon: '💰', label: 'Payments',            adminOnly: true  },
+  { to: '/expenses',            icon: '💸', label: 'Expenses',            adminOnly: true  },
+  { to: '/todos',               icon: '📋', label: 'To-Do List',          adminOnly: true  },
+  { to: '/settings',            icon: '⚙️', label: 'Settings',           adminOnly: true  },
 ];
 
 export default function Sidebar({ onClose }) {
@@ -91,7 +92,7 @@ export default function Sidebar({ onClose }) {
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-white text-sm font-medium truncate">{user?.name}</p>
-            <p className="text-purple-300 text-xs capitalize">{user?.role}</p>
+            <p className="text-purple-300 text-xs capitalize">{user?.role === 'worker' ? 'Crocheter' : user?.role}</p>
           </div>
         </div>
         <button

@@ -64,5 +64,6 @@ export const useAuthStore = create((set) => ({
   get isVendor()           { return getStoredUser()?.role === 'vendor'; },
   get isSubvendor()        { return getStoredUser()?.role === 'subvendor'; },
   get isWorker()           { return getStoredUser()?.role === 'worker'; },
+  get isCrocheter()        { return getStoredUser()?.role === 'worker'; },
   get isManager()          { return ['owner', 'admin', 'vendor', 'subvendor', 'super_admin'].includes(getStoredUser()?.role); },
 }));

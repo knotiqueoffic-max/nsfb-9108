@@ -120,8 +120,8 @@ router.get('/summary', async (req, res) => {
   res.json(summary);
 });
 
-// POST /api/production — log a production entry
-router.post('/', [
+// POST /api/production — log a production entry (managers only; crocheters submit via assigned workflow)
+router.post('/', workerManagerOnly, [
   body('product_id').isInt({ min: 1 }),
   body('quantity').isInt({ min: 1 }),
   body('production_date').isDate(),

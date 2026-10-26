@@ -7,6 +7,7 @@ import Dashboard from './pages/Dashboard'
 import Materials from './pages/Materials/index'
 import Products from './pages/Products/index'
 import Production from './pages/Production/index'
+import ProductionRequests from './pages/ProductionRequests/index'
 import Workers from './pages/Workers/index'
 import Orders from './pages/Orders/index'
 import ReportsPage from './pages/Reports/index'
@@ -54,6 +55,11 @@ export default function App() {
       <Route path="/production" element={
         <ProtectedRoute>
           <Layout><Production /></Layout>
+        </ProtectedRoute>
+      } />
+      <Route path="/production-requests" element={
+        <ProtectedRoute>
+          <Layout><ProductionRequests /></Layout>
         </ProtectedRoute>
       } />
       <Route path="/workers" element={

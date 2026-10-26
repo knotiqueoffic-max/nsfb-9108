@@ -9,7 +9,8 @@ const ROLES = Object.freeze({
   ADMIN:       'admin',       // Organization administrator
   VENDOR:      'vendor',      // Supplier / vendor organization
   SUBVENDOR:   'subvendor',   // Subcontractor under a vendor
-  WORKER:      'worker',      // Production worker / artisan
+  WORKER:      'worker',      // Production worker / artisan (crocheter)
+  CROCHETER:   'worker',      // Business-facing terminology alias for worker
 });
 
 const ACCOUNT_STATUS = Object.freeze({
@@ -37,6 +38,37 @@ const INVITATION_STATUS = Object.freeze({
   REVOKED:  'revoked',
 });
 
+const PRODUCTION_REQUEST_STATUS = Object.freeze({
+  DRAFT:                'draft',
+  OPEN:                 'open',
+  AWARDED:              'awarded',
+  ACCEPTED:             'accepted',
+  IN_PROGRESS:          'in_progress',
+  SUBMITTED_FOR_REVIEW: 'submitted_for_review',
+  APPROVED:             'approved',
+  COMPLETED:            'completed',
+  DECLINED:             'declined',
+  CANCELLED:            'cancelled',
+  EXPIRED:              'expired',
+});
+
+const PRODUCTION_BID_STATUS = Object.freeze({
+  SUBMITTED:    'submitted',
+  REVISED:      'revised',
+  WITHDRAWN:    'withdrawn',
+  AWARDED:      'awarded',
+  ACCEPTED:     'accepted',
+  DECLINED:     'declined',
+  NOT_SELECTED: 'not_selected',
+});
+
+const PRODUCTION_PROGRESS_STATUS = Object.freeze({
+  PROGRESS:             'progress',
+  SUBMITTED_FOR_REVIEW: 'submitted_for_review',
+  CORRECTION_REQUESTED: 'correction_requested',
+  APPROVED:             'approved',
+});
+
 // Helper checks
 function isPlatformAdmin(role) {
   return role === ROLES.SUPER_ADMIN;
@@ -62,6 +94,10 @@ function isWorker(role) {
   return role === ROLES.WORKER;
 }
 
+function isCrocheter(role) {
+  return role === ROLES.WORKER;
+}
+
 function canManageWorkers(role) {
   return [ROLES.OWNER, ROLES.ADMIN, ROLES.VENDOR, ROLES.SUBVENDOR, ROLES.SUPER_ADMIN].includes(role);
 }
@@ -72,6 +108,10 @@ function canManageBilling(role) {
 
 function canManagePurchasing(role) {
   return [ROLES.OWNER, ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(role);
+}
+
+function canCreateProductionRequest(role) {
+  return [ROLES.OWNER, ROLES.ADMIN, ROLES.VENDOR, ROLES.SUBVENDOR, ROLES.SUPER_ADMIN].includes(role);
 }
 
 /**
@@ -103,14 +143,19 @@ module.exports = {
   TENANT_TYPES,
   RELATIONSHIP_TYPES,
   INVITATION_STATUS,
+  PRODUCTION_REQUEST_STATUS,
+  PRODUCTION_BID_STATUS,
+  PRODUCTION_PROGRESS_STATUS,
   isPlatformAdmin,
   isOwner,
   isAdmin,
   isVendor,
   isSubvendor,
   isWorker,
+  isCrocheter,
   canManageWorkers,
   canManageBilling,
   canManagePurchasing,
+  canCreateProductionRequest,
   canAssignRole,
 };

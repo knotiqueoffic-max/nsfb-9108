@@ -84,9 +84,10 @@ function MaterialsPopover({ entryId, productId }) {
 export default function Production() {
   const { user } = useAuthStore();
   const isAdmin = ['owner', 'admin', 'super_admin'].includes(user?.role);
+  const isManager = ['owner', 'admin', 'vendor', 'subvendor', 'super_admin'].includes(user?.role);
   const qc = useQueryClient();
 
-  const [tab, setTab] = useState('log');
+  const [tab, setTab] = useState(isManager ? 'log' : 'history');
   const [filters, setFilters] = useState({ worker_id: '', product_id: '', status: '', start: daysAgo(30), end: today() });
   const [selectedIds, setSelectedIds] = useState([]);
   const [editingNoteEntry, setEditingNoteEntry] = useState(null);
@@ -98,11 +99,11 @@ export default function Production() {
   });
   const products = productsData || [];
 
-  // Fetch workers (admin only)
+  // Fetch crocheters (managers only)
   const { data: workersData } = useQuery({
     queryKey: ['workers'],
     queryFn: () => api.get('/workers').then(r => r.data),
-    enabled: isAdmin,
+    enabled: isManager,
   });
   const workers = workersData || [];
 
@@ -270,16 +271,18 @@ export default function Production() {
     <div className="space-y-6">
       {/* Tabs */}
       <div className="flex gap-2">
-        <button onClick={() => setTab('log')} className={`btn ${tab === 'log' ? 'btn-primary' : 'btn-secondary'}`}>
-          📝 Log Entry
-        </button>
+        {isManager && (
+          <button onClick={() => setTab('log')} className={`btn ${tab === 'log' ? 'btn-primary' : 'btn-secondary'}`}>
+            📝 Log Entry
+          </button>
+        )}
         <button onClick={() => setTab('history')} className={`btn ${tab === 'history' ? 'btn-primary' : 'btn-secondary'}`}>
           📋 History & Payouts
         </button>
       </div>
 
-      {/* Log Entry Tab */}
-      {tab === 'log' && (
+      {/* Log Entry Tab (Managers only) */}
+      {isManager && tab === 'log' && (
         <div className="card max-w-xl">
           <h2 className="text-lg font-semibold text-slate-800 mb-5">Log Daily Production</h2>
 
@@ -291,11 +294,11 @@ export default function Production() {
           )}
 
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-            {isAdmin && (
+            {isManager && (
               <div>
-                <label className="label">Worker *</label>
-                <select {...register('worker_id', { required: 'Worker is required' })} className="select">
-                  <option value="">Select worker...</option>
+                <label className="label">Crocheter *</label>
+                <select {...register('worker_id', { required: 'Crocheter is required' })} className="select">
+                  <option value="">Select crocheter...</option>
                   {workers.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
                 </select>
                 {errors.worker_id && <p className="text-red-500 text-xs mt-1">{errors.worker_id.message}</p>}
