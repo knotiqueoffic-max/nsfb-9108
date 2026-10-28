@@ -106,7 +106,7 @@ router.get('/me/usage', async (req, res) => {
 });
 
 // ─── GET /api/tenants/me/billing — current plan + billing info ────────────────
-router.get('/me/billing', ownerOnly, async (req, res) => {
+router.get('/me/billing', workerManagerOnly, async (req, res) => {
   const tenant = await db('tenants').where('id', req.tenant_id).first();
   const plan = tenant ? await db('plans').where('id', tenant.plan_id).first() : null;
   res.json({

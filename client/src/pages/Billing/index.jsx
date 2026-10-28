@@ -83,7 +83,7 @@ export default function BillingPage() {
   const { data: invoicesData, isLoading: isInvoicesLoading } = useQuery({
     queryKey: ['invoices'],
     queryFn: () => api.get('/billing/invoices').then(r => r.data),
-    enabled: ['owner', 'super_admin'].includes(user?.role),
+    enabled: ['owner', 'admin', 'vendor', 'subvendor', 'super_admin'].includes(user?.role),
   });
 
   // Subscribe mutation

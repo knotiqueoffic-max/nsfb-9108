@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const crypto = require('crypto');
 const db = require('../db/database');
-const { authenticate, ownerOnly, requireTenant } = require('../middleware/auth');
+const { authenticate, ownerOnly, requireTenant, planSubscriberOnly } = require('../middleware/auth');
 const { createSubscription, cancelSubscription, validateWebhookSignature } = require('../services/razorpay.service');
 const { logAuditEvent } = require('../services/audit.service');
 
@@ -64,18 +64,18 @@ router.post('/webhook', async (req, res) => {
   }
 });
 
-// All other endpoints require user authentication
-router.use(authenticate);
-router.use(requireTenant);
-
-// ─── GET /api/billing/plans — list all available plans ──────────────────────
+// ─── GET /api/billing/plans — list all available plans (Public) ─────────────
 router.get('/plans', async (req, res) => {
   const plans = await db('plans').where('is_active', true);
   res.json(plans);
 });
 
+// All other endpoints require user authentication
+router.use(authenticate);
+router.use(requireTenant);
+
 // ─── GET /api/billing/invoices — payment history ──────────────────────────────
-router.get('/invoices', ownerOnly, async (req, res) => {
+router.get('/invoices', planSubscriberOnly, async (req, res) => {
   const invoices = await db('invoices')
     .where('tenant_id', req.tenant_id)
     .orderBy('billing_date', 'desc');
@@ -83,7 +83,7 @@ router.get('/invoices', ownerOnly, async (req, res) => {
 });
 
 // ─── POST /api/billing/subscribe ──────────────────────────────────────────────
-router.post('/subscribe', ownerOnly, async (req, res) => {
+router.post('/subscribe', planSubscriberOnly, async (req, res) => {
   const { plan_id } = req.body;
   if (!plan_id) return res.status(400).json({ error: 'plan_id is required' });
 
@@ -147,7 +147,7 @@ router.post('/subscribe', ownerOnly, async (req, res) => {
 });
 
 // ─── POST /api/billing/verify-payment ─────────────────────────────────────────
-router.post('/verify-payment', ownerOnly, async (req, res) => {
+router.post('/verify-payment', planSubscriberOnly, async (req, res) => {
   const { razorpay_payment_id, razorpay_subscription_id, razorpay_signature, plan_id } = req.body;
 
   // Verify signature if signature details are provided (live mode verification)
@@ -209,7 +209,7 @@ router.post('/verify-payment', ownerOnly, async (req, res) => {
 });
 
 // ─── POST /api/billing/cancel ─────────────────────────────────────────────────
-router.post('/cancel', ownerOnly, async (req, res) => {
+router.post('/cancel', planSubscriberOnly, async (req, res) => {
   try {
     const tenant = await db('tenants').where('id', req.tenant_id).first();
     if (!tenant || !tenant.razorpay_subscription_id) {

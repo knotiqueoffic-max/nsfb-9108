@@ -126,6 +126,21 @@ function ownerOnly(req, res, next) {
 }
 
 /**
+ * planSubscriberOnly — allows business accounts (owner, admin, vendor, subvendor, super_admin)
+ * to view, subscribe, and manage unified subscription plans.
+ * Strictly blocks workers/crocheters.
+ */
+function planSubscriberOnly(req, res, next) {
+  if (req.user?.role === ROLES.WORKER || req.user?.role === 'crocheter') {
+    return res.status(403).json({ error: 'Workers cannot manage or purchase subscription plans' });
+  }
+  if ([ROLES.OWNER, ROLES.ADMIN, ROLES.VENDOR, ROLES.SUBVENDOR, ROLES.SUPER_ADMIN].includes(req.user?.role)) {
+    return next();
+  }
+  return res.status(403).json({ error: 'Subscription access required' });
+}
+
+/**
  * superAdminOnly — allows only the platform super_admin.
  */
 function superAdminOnly(req, res, next) {
@@ -212,4 +227,5 @@ module.exports = {
   vendorOnly,
   selfOrAdmin,
   checkTenantLock,
+  planSubscriberOnly,
 };

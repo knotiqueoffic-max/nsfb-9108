@@ -35,8 +35,9 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={isAuthenticated ? <Navigate to="/" replace /> : <Login />} />
-      <Route path="/signup" element={isAuthenticated ? <Navigate to="/" replace /> : <Signup />} />
+      <Route path="/signup" element={isAuthenticated ? <Navigate to="/choose-plan" replace /> : <Signup />} />
       <Route path="/pricing" element={<PricingPage />} />
+      <Route path="/choose-plan" element={<PricingPage isPostSignup={true} />} />
       <Route path="/" element={
         <ProtectedRoute>
           <Layout><Dashboard /></Layout>
@@ -98,7 +99,7 @@ export default function App() {
         </ProtectedRoute>
       } />
       <Route path="/billing" element={
-        <ProtectedRoute adminOnly>
+        <ProtectedRoute managerOnly>
           <Layout><BillingPage /></Layout>
         </ProtectedRoute>
       } />

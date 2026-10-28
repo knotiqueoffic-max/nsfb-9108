@@ -103,7 +103,7 @@ function canManageWorkers(role) {
 }
 
 function canManageBilling(role) {
-  return [ROLES.OWNER, ROLES.SUPER_ADMIN].includes(role);
+  return [ROLES.OWNER, ROLES.ADMIN, ROLES.VENDOR, ROLES.SUBVENDOR, ROLES.SUPER_ADMIN].includes(role);
 }
 
 function canManagePurchasing(role) {

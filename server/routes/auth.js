@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 const { body, validationResult } = require('express-validator');
 const db = require('../db/database');
 const { generateToken, authenticate, adminOnly, requireTenant } = require('../middleware/auth');
-const { ROLES, ACCOUNT_STATUS, canAssignRole } = require('../constants/roles');
+const { ROLES, ACCOUNT_STATUS, TENANT_TYPES, canAssignRole } = require('../constants/roles');
 const { logAuditEvent } = require('../services/audit.service');
 const { verifyGoogleToken, getGoogleClientId, GoogleAuthError } = require('../services/google.service');
 const { deleteUserSafely } = require('../services/user.service');
@@ -90,7 +90,7 @@ router.get('/me', authenticate, async (req, res) => {
   res.json(userResponse);
 });
 
-// ─── POST /api/auth/signup — public; creates a new tenant + owner account ─────
+// ─── POST /api/auth/signup — public; creates a new tenant + admin/vendor/subvendor account ─────
 router.post('/signup', [
   body('name').trim().notEmpty().withMessage('Full name is required'),
   body('email').isEmail().normalizeEmail().withMessage('Valid email is required'),
@@ -98,11 +98,28 @@ router.post('/signup', [
   body('company_name').trim().notEmpty().withMessage('Business name is required'),
   body('plan_id').optional().isIn(['free_trial', 'starter', 'growth', 'business']),
   body('phone').optional().trim(),
+  body('role').optional().trim(),
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-  const { name, email, password, company_name, plan_id = 'free_trial', business_category, phone } = req.body;
+  const { name, email, password, company_name, plan_id = 'free_trial', business_category, phone, role } = req.body;
+
+  // Crocheters / Workers are strictly blocked from self-registration
+  if (role === ROLES.WORKER || role === 'crocheter') {
+    return res.status(403).json({
+      error: 'Workers cannot self-register. Please contact your Admin or Vendor for an invitation.',
+    });
+  }
+
+  const ALLOWED_SIGNUP_ROLES = [ROLES.ADMIN, ROLES.VENDOR, ROLES.SUBVENDOR, ROLES.OWNER];
+  if (role && !ALLOWED_SIGNUP_ROLES.includes(role)) {
+    return res.status(400).json({
+      error: 'Invalid role. Self-registration is only allowed for Admin, Vendor, or Sub-Vendor.',
+    });
+  }
+
+  const assignedRole = role || ROLES.ADMIN;
 
   // Check email not already used
   const existingUser = await db('users').where('email', email).first();
@@ -112,7 +129,7 @@ router.post('/signup', [
   let baseSlug = company_name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '');
+    .replace(/^-|-$/g, '') || 'workspace';
 
   // Ensure slug is unique
   let slug = baseSlug;
@@ -123,6 +140,7 @@ router.post('/signup', [
 
   // 14-day trial
   const trialEndsAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+  const tenantType = assignedRole === ROLES.VENDOR ? TENANT_TYPES.VENDOR : assignedRole === ROLES.SUBVENDOR ? TENANT_TYPES.SUBVENDOR : TENANT_TYPES.BUSINESS;
 
   // Use a transaction so user + tenant are created atomically
   try {
@@ -135,13 +153,13 @@ router.post('/signup', [
         plan_id,
         trial_ends_at:       trialEndsAt,
         subscription_status: 'trialing',
-        tenant_type:         'business',
+        tenant_type:         tenantType,
         status:              'active',
         onboarding_dismissed: false,
       }).returning('id');
       const resolvedTenantId = typeof tenantId === 'object' ? tenantId.id : tenantId;
 
-      // Create owner user — role strictly enforced as OWNER
+      // Create user with explicit assigned role
       const password_hash = await bcrypt.hash(password, 10);
       const [userId] = await trx('users').insert({
         tenant_id:     resolvedTenantId,
@@ -149,14 +167,14 @@ router.post('/signup', [
         email,
         phone:         phone || null,
         password_hash,
-        role:          ROLES.OWNER,
+        role:          assignedRole,
         status:        ACCOUNT_STATUS.ACTIVE,
         is_active:     true,
         token_version: 1,
       }).returning('id');
       const resolvedUserId = typeof userId === 'object' ? userId.id : userId;
 
-      // Link tenant to owner
+      // Link tenant to owner/creator
       await trx('tenants').where('id', resolvedTenantId).update({ owner_id: resolvedUserId });
 
       // Seed default settings for new tenant
@@ -186,7 +204,7 @@ router.post('/signup', [
       target_type: 'tenants',
       target_id: result.tenantId,
       ip_address: req.ip,
-      details: { company_name, email, plan_id },
+      details: { company_name, email, plan_id, role: assignedRole },
     });
 
     res.status(201).json({ token, user: userResponse });
@@ -196,63 +214,182 @@ router.post('/signup', [
   }
 });
 
-// ─── POST /api/auth/register — managers add a user to their tenant ───────────
-router.post('/register', authenticate, requireTenant, [
-  body('name').trim().notEmpty().withMessage('Name is required'),
-  body('email').isEmail().normalizeEmail().withMessage('Valid email is required'),
-  body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
-  body('role').isIn([ROLES.ADMIN, ROLES.VENDOR, ROLES.SUBVENDOR, ROLES.WORKER]).withMessage('Valid role is required'),
-  body('phone').optional().trim(),
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+// ─── POST /api/auth/register — supports public self-signup OR manager adding subordinates ───
+router.post(
+  '/register',
+  async (req, res, next) => {
+    // If request has NO Authorization header, handle as public self-registration
+    if (!req.headers.authorization) {
+      const { name, email, password, company_name, role, plan_id = 'free_trial', business_category, phone } = req.body;
 
-  const { name, email, password, role, wage_mode, wage_rate, phone } = req.body;
+      if (!name || !email || !password) {
+        return res.status(400).json({ error: 'Name, email, and password (min 6 characters) are required' });
+      }
+      if (typeof password !== 'string' || password.length < 6) {
+        return res.status(400).json({ error: 'Password must be at least 6 characters' });
+      }
 
-  // Enforce privilege escalation guard
-  if (!canAssignRole(req.user.role, role)) {
-    return res.status(403).json({
-      error: 'Permission denied',
-      message: `Role '${req.user.role}' is not authorized to register a '${role}'.`,
-    });
-  }
+      // Workers / crocheters strictly forbidden from public self-registration
+      if (role === ROLES.WORKER || role === 'crocheter') {
+        return res.status(403).json({
+          error: 'Workers cannot self-register. Please contact your Admin or Vendor for an invitation.',
+        });
+      }
 
-  const existing = await db('users').where('email', email).first();
-  if (existing) return res.status(409).json({ error: 'Email already in use' });
+      const ALLOWED_SIGNUP_ROLES = [ROLES.ADMIN, ROLES.VENDOR, ROLES.SUBVENDOR, ROLES.OWNER];
+      if (role && !ALLOWED_SIGNUP_ROLES.includes(role)) {
+        return res.status(400).json({
+          error: 'Invalid role. Self-registration is only allowed for Admin, Vendor, or Sub-Vendor.',
+        });
+      }
 
-  const password_hash = await bcrypt.hash(password, 10);
-  const [id] = await db('users')
-    .insert({
+      const assignedRole = role || ROLES.ADMIN;
+      const existing = await db('users').where('email', email.toLowerCase()).first();
+      if (existing) return res.status(409).json({ error: 'Email already in use' });
+
+      // Workspace / tenant setup
+      const compName = company_name || `${name}'s Workspace`;
+      let baseSlug = compName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'workspace';
+      let slug = baseSlug;
+      let slugSuffix = 1;
+      while (await db('tenants').where('slug', slug).first()) {
+        slug = `${baseSlug}-${slugSuffix++}`;
+      }
+
+      const trialEndsAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+      const tenantType = assignedRole === ROLES.VENDOR ? TENANT_TYPES.VENDOR : assignedRole === ROLES.SUBVENDOR ? TENANT_TYPES.SUBVENDOR : TENANT_TYPES.BUSINESS;
+
+      try {
+        const result = await db.transaction(async (trx) => {
+          const [tId] = await trx('tenants').insert({
+            name: compName,
+            slug,
+            business_category: business_category || null,
+            plan_id,
+            trial_ends_at: trialEndsAt,
+            subscription_status: 'trialing',
+            tenant_type: tenantType,
+            status: 'active',
+            onboarding_dismissed: false,
+          }).returning('id');
+          const resolvedTenantId = typeof tId === 'object' ? tId.id : tId;
+
+          const password_hash = await bcrypt.hash(password, 10);
+          const [uId] = await trx('users').insert({
+            tenant_id: resolvedTenantId,
+            name,
+            email: email.toLowerCase(),
+            phone: phone || null,
+            password_hash,
+            role: assignedRole,
+            status: ACCOUNT_STATUS.ACTIVE,
+            is_active: true,
+            token_version: 1,
+          }).returning('id');
+          const resolvedUserId = typeof uId === 'object' ? uId.id : uId;
+
+          await trx('tenants').where('id', resolvedTenantId).update({ owner_id: resolvedUserId });
+
+          // Seed default settings
+          const defaultSettings = [
+            { key: 'currency', value: JSON.stringify('INR') },
+            {
+              key: 'platform_commissions',
+              value: JSON.stringify({ flipkart: 18, meesho: 12, myntra: 20, etsy: 6.5, amazon: 15 }),
+            },
+            { key: 'business_name', value: JSON.stringify(compName) },
+          ];
+          for (const s of defaultSettings) {
+            await trx('settings').insert({ tenant_id: resolvedTenantId, key: s.key, value: s.value });
+          }
+
+          return { tenantId: resolvedTenantId, userId: resolvedUserId };
+        });
+
+        const newUser = await db('users').where('id', result.userId).first();
+        const token = generateToken(newUser);
+        const userResponse = await buildUserResponse(newUser);
+
+        await logAuditEvent({
+          tenant_id: result.tenantId,
+          user_id: result.userId,
+          action: 'WORKSPACE_PUBLIC_REGISTER',
+          target_type: 'tenants',
+          target_id: result.tenantId,
+          ip_address: req.ip,
+          details: { compName, email, plan_id, role: assignedRole },
+        });
+
+        return res.status(201).json({ token, user: userResponse, ...userResponse });
+      } catch (err) {
+        console.error('Public register error:', err);
+        return res.status(500).json({ error: 'Failed to create account. Please try again.' });
+      }
+    }
+
+    // Authenticated request: proceed to manager subordinate registration middleware
+    return next();
+  },
+  authenticate,
+  requireTenant,
+  [
+    body('name').trim().notEmpty().withMessage('Name is required'),
+    body('email').isEmail().normalizeEmail().withMessage('Valid email is required'),
+    body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
+    body('role').isIn([ROLES.ADMIN, ROLES.VENDOR, ROLES.SUBVENDOR, ROLES.WORKER]).withMessage('Valid role is required'),
+    body('phone').optional().trim(),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    const { name, email, password, role, wage_mode, wage_rate, phone } = req.body;
+
+    // Enforce privilege escalation guard
+    if (!canAssignRole(req.user.role, role)) {
+      return res.status(403).json({
+        error: 'Permission denied',
+        message: `Role '${req.user.role}' is not authorized to register a '${role}'.`,
+      });
+    }
+
+    const existing = await db('users').where('email', email).first();
+    if (existing) return res.status(409).json({ error: 'Email already in use' });
+
+    const password_hash = await bcrypt.hash(password, 10);
+    const [id] = await db('users')
+      .insert({
+        tenant_id: req.tenant_id,
+        name,
+        email,
+        phone: phone || null,
+        password_hash,
+        role,
+        status: ACCOUNT_STATUS.ACTIVE,
+        is_active: true,
+        token_version: 1,
+        wage_mode: wage_mode || 'per_piece',
+        wage_rate: wage_rate ? parseFloat(wage_rate) : 0,
+      })
+      .returning('id');
+    const userId = typeof id === 'object' ? id.id : id;
+
+    const newUser = await db('users').where('id', userId).first();
+    const userResponse = await buildUserResponse(newUser);
+
+    await logAuditEvent({
       tenant_id: req.tenant_id,
-      name,
-      email,
-      phone: phone || null,
-      password_hash,
-      role,
-      status: ACCOUNT_STATUS.ACTIVE,
-      is_active: true,
-      token_version: 1,
-      wage_mode: wage_mode || 'per_piece',
-      wage_rate: wage_rate ? parseFloat(wage_rate) : 0,
-    })
-    .returning('id');
-  const userId = typeof id === 'object' ? id.id : id;
+      user_id: req.user.id,
+      action: 'USER_REGISTERED',
+      target_type: 'users',
+      target_id: userId,
+      ip_address: req.ip,
+      details: { email, role },
+    });
 
-  const newUser = await db('users').where('id', userId).first();
-  const userResponse = await buildUserResponse(newUser);
-
-  await logAuditEvent({
-    tenant_id: req.tenant_id,
-    user_id: req.user.id,
-    action: 'USER_REGISTERED',
-    target_type: 'users',
-    target_id: userId,
-    ip_address: req.ip,
-    details: { email, role },
-  });
-
-  res.status(201).json(userResponse);
-});
+    res.status(201).json(userResponse);
+  }
+);
 
 // ─── PUT /api/auth/profile ────────────────────────────────────────────────────
 router.put('/profile', authenticate, [
@@ -365,9 +502,16 @@ router.get('/config', (req, res) => {
 
 // ─── POST /api/auth/google-login ──────────────────────────────────────────────
 router.post('/google-login', async (req, res) => {
-  const { token, plan_id = 'free_trial' } = req.body;
+  const { token, plan_id = 'free_trial', role } = req.body;
   if (!token || typeof token !== 'string') {
     return res.status(400).json({ error: 'Google ID token is required' });
+  }
+
+  // Workers / crocheters strictly forbidden from public self-registration
+  if (role === ROLES.WORKER || role === 'crocheter') {
+    return res.status(403).json({
+      error: 'Workers cannot self-register. Please contact your Admin or Vendor for an invitation.',
+    });
   }
 
   // Validate plan_id against known plans
@@ -493,6 +637,8 @@ router.post('/google-login', async (req, res) => {
     }
 
     const trialEndsAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+    const assignedRole = role && [ROLES.ADMIN, ROLES.VENDOR, ROLES.SUBVENDOR, ROLES.OWNER].includes(role) ? role : ROLES.OWNER;
+    const tenantType = assignedRole === ROLES.VENDOR ? TENANT_TYPES.VENDOR : assignedRole === ROLES.SUBVENDOR ? TENANT_TYPES.SUBVENDOR : TENANT_TYPES.BUSINESS;
 
     const result = await db.transaction(async (trx) => {
       // Create new tenant
@@ -503,19 +649,19 @@ router.post('/google-login', async (req, res) => {
         plan_id:             resolvedPlanId,
         trial_ends_at:       trialEndsAt,
         subscription_status: 'trialing',
-        tenant_type:         'business',
+        tenant_type:         tenantType,
         status:              'active',
         onboarding_dismissed: false,
       }).returning('id');
       const resolvedTenantId = typeof tenantId === 'object' ? tenantId.id : tenantId;
 
-      // Create owner user linked with Google — using displayName fallback for name
+      // Create user linked with Google — using displayName fallback for name and assigned role
       const [userId] = await trx('users').insert({
         tenant_id:            resolvedTenantId,
         name:                 displayName,
         email:                email.toLowerCase(),
         password_hash:        null, // google-only user has no password initially
-        role:                 ROLES.OWNER,
+        role:                 assignedRole,
         status:               ACCOUNT_STATUS.ACTIVE,
         is_active:            true,
         token_version:        1,

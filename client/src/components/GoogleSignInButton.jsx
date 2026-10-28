@@ -7,7 +7,7 @@ import { useAuthStore } from '../store/auth';
 
 const FALLBACK_CLIENT_ID = '268763150621-4qgrhe5pgmkd7s3ru6mucmk9m9e3vr9e.apps.googleusercontent.com';
 
-export default function GoogleSignInButton({ planId = 'free_trial' }) {
+export default function GoogleSignInButton({ planId = 'free_trial', role, redirectUrl }) {
   const navigate = useNavigate();
   const { login } = useAuthStore();
   const googleBtnRef = useRef(null);
@@ -22,7 +22,9 @@ export default function GoogleSignInButton({ planId = 'free_trial' }) {
       if (!token || typeof token !== 'string') {
         throw new Error('Google credential was not provided.');
       }
-      const res = await api.post('/auth/google-login', { token, plan_id: planId });
+      const payload = { token, plan_id: planId };
+      if (role) payload.role = role;
+      const res = await api.post('/auth/google-login', payload);
       const data = res?.data;
       if (!data || typeof data !== 'object' || !data.token || !data.user || !data.user.id) {
         throw new Error('Server returned an invalid authentication response.');
@@ -38,7 +40,7 @@ export default function GoogleSignInButton({ planId = 'free_trial' }) {
         } else {
           toast.success(`Welcome, ${data.user.name || 'User'}!`);
         }
-        navigate('/');
+        navigate(redirectUrl || '/');
       } else {
         toast.error('Failed to establish session. Please try again.');
       }
