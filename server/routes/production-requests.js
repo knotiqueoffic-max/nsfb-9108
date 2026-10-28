@@ -13,32 +13,50 @@ const { logAuditEvent } = require('../services/audit.service');
 const { uploadSubmissionMedia } = require('../middleware/upload');
 
 router.use(authenticate);
-router.use(requireTenant);
+router.use((req, res, next) => {
+  const isWorker = req.user?.role === ROLES.WORKER || req.user?.role === 'crocheter';
+  if (isWorker || req.user?.role === ROLES.SUPER_ADMIN) {
+    return next();
+  }
+  return requireTenant(req, res, next);
+});
 
 // ─── Helper: Determine if caller is an eligible recipient for a request ────────
 async function isEligibleRecipient(req, request) {
   const user = req.user;
   const tenantId = req.tenant_id;
+  const isWorker = user.role === ROLES.WORKER || user.role === 'crocheter';
 
   // Crocheter targeting
-  if (request.target_role === ROLES.WORKER) {
-    if (user.role !== ROLES.WORKER) return false;
+  if (request.target_role === ROLES.WORKER || request.target_role === 'crocheter') {
+    if (!isWorker) return false;
+
+    // Awarded worker is always eligible to view and track their request
+    if (
+      request.awarded_to_type === 'user' &&
+      (request.awarded_to_id === user.id || String(request.awarded_to_id) === String(user.id))
+    ) {
+      return true;
+    }
 
     if (request.scope_type === 'specific') {
       const match = await db('production_request_recipients')
         .where('request_id', request.id)
         .where('recipient_type', 'user')
-        .where('recipient_id', user.id)
+        .where(function () {
+          this.where('recipient_id', user.id).orWhere('recipient_id', String(user.id));
+        })
         .first();
       return !!match;
     }
 
-    // 'all_eligible': crocheters in the issuer's tenant
-    return tenantId === request.tenant_id;
+    // 'all_eligible' / broadcast: any active worker or crocheter can see and bid on requests
+    return true;
   }
 
   // Vendor targeting
   if (request.target_role === ROLES.VENDOR) {
+    if (!tenantId) return false;
     // Caller's tenant must be a vendor
     const callerTenant = await db('tenants').where('id', tenantId).first();
     if (!callerTenant || callerTenant.tenant_type !== 'vendor') {
@@ -50,7 +68,9 @@ async function isEligibleRecipient(req, request) {
       const match = await db('production_request_recipients')
         .where('request_id', request.id)
         .where('recipient_type', 'tenant')
-        .where('recipient_id', tenantId)
+        .where(function () {
+          this.where('recipient_id', tenantId).orWhere('recipient_id', String(tenantId));
+        })
         .first();
       return !!match;
     }
@@ -66,6 +86,7 @@ async function isEligibleRecipient(req, request) {
 
   // Subvendor targeting
   if (request.target_role === ROLES.SUBVENDOR) {
+    if (!tenantId) return false;
     // Caller's tenant must be a subvendor
     const callerTenant = await db('tenants').where('id', tenantId).first();
     if (!callerTenant || callerTenant.tenant_type !== 'subvendor') {
@@ -76,7 +97,9 @@ async function isEligibleRecipient(req, request) {
       const match = await db('production_request_recipients')
         .where('request_id', request.id)
         .where('recipient_type', 'tenant')
-        .where('recipient_id', tenantId)
+        .where(function () {
+          this.where('recipient_id', tenantId).orWhere('recipient_id', String(tenantId));
+        })
         .first();
       return !!match;
     }
@@ -97,7 +120,7 @@ async function isEligibleRecipient(req, request) {
 // ─── 1. POST /api/production-requests — Create request ─────────────────────────
 router.post('/', [
   body('title').trim().notEmpty().withMessage('Request title is required'),
-  body('target_role').isIn([ROLES.VENDOR, ROLES.SUBVENDOR, ROLES.WORKER]).withMessage('Valid target role required (vendor, subvendor, worker)'),
+  body('target_role').isIn([ROLES.VENDOR, ROLES.SUBVENDOR, ROLES.WORKER, 'crocheter']).withMessage('Valid target role required (vendor, subvendor, worker)'),
   body('quantity').isInt({ min: 1 }).withMessage('Quantity must be at least 1'),
   body('submission_deadline').notEmpty().withMessage('Submission deadline is required'),
   body('completion_deadline').notEmpty().withMessage('Completion deadline is required'),
@@ -145,6 +168,7 @@ router.post('/', [
   }
 
   // Validate specific recipients if scope is specific
+  let resolvedRecipientIds = recipient_ids;
   if (scope_type === 'specific') {
     if (!recipient_ids.length) {
       return res.status(400).json({ error: 'Recipient IDs must be provided when scope is specific' });
@@ -166,14 +190,25 @@ router.post('/', [
       if (validSubvendors.length !== recipient_ids.length) {
         return res.status(400).json({ error: 'One or more subvendors are not in your authorized organization network' });
       }
-    } else if (target_role === ROLES.WORKER) {
+    } else if (target_role === ROLES.WORKER || target_role === 'crocheter') {
+      const numericIds = recipient_ids.map(Number).filter(n => !isNaN(n));
       const validWorkers = await db('users')
-        .where('tenant_id', req.tenant_id)
-        .where('role', ROLES.WORKER)
-        .whereIn('id', recipient_ids)
-        .where('status', 'active');
-      if (validWorkers.length !== recipient_ids.length) {
-        return res.status(400).json({ error: 'One or more crocheters are not active members of your organization' });
+        .whereIn('role', [ROLES.WORKER, 'crocheter'])
+        .where(function () {
+          this.whereIn('id', numericIds);
+          if (recipient_ids.some(r => typeof r === 'string' && r.includes('@'))) {
+            this.orWhereIn('email', recipient_ids);
+          }
+        })
+        .where(function () {
+          this.where('status', 'active').orWhere('is_active', true).orWhereNull('status');
+        });
+
+      if (validWorkers.length !== recipient_ids.length && validWorkers.length === 0) {
+        return res.status(400).json({ error: 'One or more crocheters could not be found or are inactive' });
+      }
+      if (validWorkers.length > 0) {
+        resolvedRecipientIds = validWorkers.map(w => w.id);
       }
     }
   }
@@ -185,7 +220,7 @@ router.post('/', [
       tenant_id:           req.tenant_id,
       request_code:        requestCode,
       created_by:          req.user.id,
-      target_role,
+      target_role:         target_role === 'crocheter' ? ROLES.WORKER : target_role,
       scope_type,
       product_id:          product_id || null,
       title,
@@ -203,12 +238,12 @@ router.post('/', [
     }).returning('id');
     const reqId = typeof inserted === 'object' ? inserted.id : inserted;
 
-    if (scope_type === 'specific' && recipient_ids.length) {
-      const recipientType = target_role === ROLES.WORKER ? 'user' : 'tenant';
-      const recipientRows = recipient_ids.map(rid => ({
+    if (scope_type === 'specific' && resolvedRecipientIds.length) {
+      const recipientType = (target_role === ROLES.WORKER || target_role === 'crocheter') ? 'user' : 'tenant';
+      const recipientRows = resolvedRecipientIds.map(rid => ({
         request_id:     reqId,
         recipient_type: recipientType,
-        recipient_id:   rid,
+        recipient_id:   parseInt(rid, 10),
       }));
       await trx('production_request_recipients').insert(recipientRows);
     }
@@ -272,12 +307,13 @@ router.get('/', async (req, res) => {
   // Viewing received / available requests (for bidders)
   // Fetch candidate requests based on role
   let candidateRequests = [];
+  const isWorker = req.user.role === ROLES.WORKER || req.user.role === 'crocheter';
 
-  if (req.user.role === ROLES.WORKER) {
-    // Requests targeted at worker
+  if (isWorker) {
+    // Requests targeted at worker / crocheter
     candidateRequests = await db('production_requests as pr')
       .leftJoin('products as p', 'pr.product_id', 'p.id')
-      .where('pr.target_role', ROLES.WORKER)
+      .whereIn('pr.target_role', [ROLES.WORKER, 'crocheter'])
       .whereNotIn('pr.status', ['draft'])
       .select('pr.*', 'p.name as product_name', 'p.sku')
       .orderBy('pr.created_at', 'desc');
@@ -311,7 +347,7 @@ router.get('/', async (req, res) => {
   const myBids = await db('production_bids')
     .whereIn('request_id', authorizedIds)
     .where(function () {
-      if (req.user.role === ROLES.WORKER) {
+      if (isWorker) {
         this.where('bidder_type', 'user').andWhere('bidder_id', req.user.id);
       } else {
         this.where('bidder_type', 'tenant').andWhere('bidder_id', req.tenant_id);
@@ -337,12 +373,17 @@ router.get('/approvals/queue', async (req, res) => {
     return res.status(403).json({ error: 'Access denied: Only managers and admins can access the approval queue' });
   }
 
-  const pendingSubmissions = await db('production_submissions as ps')
+  let query = db('production_submissions as ps')
     .join('production_requests as pr', 'ps.production_request_id', 'pr.id')
     .leftJoin('products as p', 'pr.product_id', 'p.id')
     .leftJoin('users as u', 'ps.worker_id', 'u.id')
-    .where('ps.tenant_id', req.tenant_id)
-    .where('ps.status', 'pending_approval')
+    .where('ps.status', 'pending_approval');
+
+  if (req.user.role !== ROLES.SUPER_ADMIN && req.tenant_id) {
+    query = query.where('ps.tenant_id', req.tenant_id);
+  }
+
+  const pendingSubmissions = await query
     .select(
       'ps.*',
       'pr.request_code',
@@ -436,10 +477,11 @@ router.get('/:id', async (req, res) => {
 
   // If recipient: PRIVACY ENFORCED.
   // Strips all competitor bids and recipients.
+  const isWorkerCaller = req.user.role === ROLES.WORKER || req.user.role === 'crocheter';
   const myBid = await db('production_bids')
     .where('request_id', request.id)
     .where(function () {
-      if (req.user.role === ROLES.WORKER) {
+      if (isWorkerCaller) {
         this.where('bidder_type', 'user').andWhere('bidder_id', req.user.id);
       } else {
         this.where('bidder_type', 'tenant').andWhere('bidder_id', req.tenant_id);
@@ -450,8 +492,8 @@ router.get('/:id', async (req, res) => {
   // Progress logs only if awarded to this caller
   let progressLogs = [];
   const isAwardee =
-    (request.awarded_to_type === 'user' && request.awarded_to_id === req.user.id) ||
-    (request.awarded_to_type === 'tenant' && request.awarded_to_id === req.tenant_id);
+    (request.awarded_to_type === 'user' && (request.awarded_to_id === req.user.id || String(request.awarded_to_id) === String(req.user.id))) ||
+    (request.awarded_to_type === 'tenant' && (request.awarded_to_id === req.tenant_id || String(request.awarded_to_id) === String(req.tenant_id)));
 
   if (isAwardee) {
     progressLogs = await db('production_progress_logs')
@@ -504,12 +546,14 @@ router.post('/:id/bids', [
   const request = await db('production_requests').where('id', req.params.id).first();
   if (!request) return res.status(404).json({ error: 'Production request not found' });
 
+  const isWorkerCaller = req.user.role === ROLES.WORKER || req.user.role === 'crocheter';
+
   // Caller cannot bid if they created the request
   if (request.created_by === req.user.id) {
     return res.status(400).json({ error: 'Cannot bid on requests you created' });
   }
   // An organization manager cannot bid on requests issued by their own organization
-  if (req.user.role !== ROLES.WORKER && request.tenant_id === req.tenant_id) {
+  if (!isWorkerCaller && request.tenant_id === req.tenant_id) {
     return res.status(400).json({ error: 'Cannot bid on requests issued by your own organization' });
   }
 
@@ -530,8 +574,8 @@ router.post('/:id/bids', [
   }
 
   const { proposed_price, quantity, estimated_completion_date, notes } = req.body;
-  const bidderType = req.user.role === ROLES.WORKER ? 'user' : 'tenant';
-  const bidderId   = req.user.role === ROLES.WORKER ? req.user.id : req.tenant_id;
+  const bidderType = isWorkerCaller ? 'user' : 'tenant';
+  const bidderId   = isWorkerCaller ? req.user.id : req.tenant_id;
 
   // Check if active bid already exists from this bidder
   const existingBid = await db('production_bids')
@@ -752,8 +796,8 @@ router.post('/:id/respond-award', [
 
   // Verify caller is the awardee
   const isAwardee =
-    (request.awarded_to_type === 'user' && request.awarded_to_id === req.user.id) ||
-    (request.awarded_to_type === 'tenant' && request.awarded_to_id === req.tenant_id);
+    (request.awarded_to_type === 'user' && (request.awarded_to_id === req.user.id || String(request.awarded_to_id) === String(req.user.id))) ||
+    (request.awarded_to_type === 'tenant' && (request.awarded_to_id === req.tenant_id || String(request.awarded_to_id) === String(req.tenant_id)));
 
   if (!isAwardee) {
     return res.status(403).json({ error: 'Access denied: Only the selected recipient can accept or decline this award' });
@@ -822,8 +866,8 @@ router.post('/:id/progress', [
 
   // Caller must be the assigned recipient
   const isAwardee =
-    (request.awarded_to_type === 'user' && request.awarded_to_id === req.user.id) ||
-    (request.awarded_to_type === 'tenant' && request.awarded_to_id === req.tenant_id);
+    (request.awarded_to_type === 'user' && (request.awarded_to_id === req.user.id || String(request.awarded_to_id) === String(req.user.id))) ||
+    (request.awarded_to_type === 'tenant' && (request.awarded_to_id === req.tenant_id || String(request.awarded_to_id) === String(req.tenant_id)));
 
   if (!isAwardee) {
     return res.status(403).json({ error: 'Access denied: Only the assigned recipient can log progress' });
@@ -988,8 +1032,8 @@ router.post(
 
     // Authorization: Caller must be the actual awarded recipient (worker/crocheter or vendor)
     const isAwardee =
-      (request.awarded_to_type === 'user' && request.awarded_to_id === req.user.id) ||
-      (request.awarded_to_type === 'tenant' && request.awarded_to_id === req.tenant_id);
+      (request.awarded_to_type === 'user' && (request.awarded_to_id === req.user.id || String(request.awarded_to_id) === String(req.user.id))) ||
+      (request.awarded_to_type === 'tenant' && (request.awarded_to_id === req.tenant_id || String(request.awarded_to_id) === String(req.tenant_id)));
 
     if (!isAwardee) {
       return res.status(403).json({ error: 'Access denied: Only the awarded recipient can upload work submissions' });
@@ -1092,10 +1136,11 @@ router.get('/:id/submissions', async (req, res) => {
   const request = await db('production_requests').where('id', req.params.id).first();
   if (!request) return res.status(404).json({ error: 'Production request not found' });
 
-  const isIssuer = request.tenant_id === req.tenant_id && req.user.role !== ROLES.WORKER;
+  const isWorkerCaller = req.user.role === ROLES.WORKER || req.user.role === 'crocheter';
+  const isIssuer = request.tenant_id === req.tenant_id && !isWorkerCaller;
   const isAwardee =
-    (request.awarded_to_type === 'user' && request.awarded_to_id === req.user.id) ||
-    (request.awarded_to_type === 'tenant' && request.awarded_to_id === req.tenant_id);
+    (request.awarded_to_type === 'user' && (request.awarded_to_id === req.user.id || String(request.awarded_to_id) === String(req.user.id))) ||
+    (request.awarded_to_type === 'tenant' && (request.awarded_to_id === req.tenant_id || String(request.awarded_to_id) === String(req.tenant_id)));
 
   // Strict Authorization & Privacy:
   // Only the issuing organization or the awarded recipient can view submissions
@@ -1151,10 +1196,11 @@ router.patch(
 
     // Authorization: STRICTLY restricted to the Admin / Issuer who owns the request.
     // Crocheters / workers MUST NOT be able to review their own work.
+    const isWorkerCaller = req.user.role === ROLES.WORKER || req.user.role === 'crocheter';
     const isIssuer = request.tenant_id === req.tenant_id;
     const isManagerRole = [ROLES.OWNER, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.VENDOR, ROLES.SUBVENDOR].includes(req.user.role);
 
-    if (!isIssuer || !isManagerRole || req.user.role === ROLES.WORKER) {
+    if (!isIssuer || !isManagerRole || isWorkerCaller) {
       return res.status(403).json({ error: 'Access denied: Only authorized administrators or request issuers can review submissions' });
     }
 

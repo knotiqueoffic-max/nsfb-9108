@@ -14,7 +14,7 @@ router.get('/', workerManagerOnly, async (req, res) => {
   const { active } = req.query;
   let query = db('users')
     .where('tenant_id', req.tenant_id)
-    .where('role', ROLES.WORKER)
+    .whereIn('role', [ROLES.WORKER, 'crocheter'])
     .orderBy('name')
     .select('id', 'name', 'email', 'phone', 'role', 'wage_mode', 'wage_rate', 'is_active', 'status', 'created_at', 'tenant_id');
   if (active !== undefined) query = query.where('is_active', active === 'true');
@@ -71,7 +71,7 @@ router.post('/', workerManagerOnly, [
     if (plan && plan.max_workers !== -1) {
       const currentWorkerCount = await db('users')
         .where('tenant_id', req.tenant_id)
-        .where('role', ROLES.WORKER)
+        .whereIn('role', [ROLES.WORKER, 'crocheter'])
         .where('is_active', true)
         .count('id as count')
         .first();

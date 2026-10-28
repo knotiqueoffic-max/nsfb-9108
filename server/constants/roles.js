@@ -91,11 +91,11 @@ function isSubvendor(role) {
 }
 
 function isWorker(role) {
-  return role === ROLES.WORKER;
+  return role === ROLES.WORKER || role === 'crocheter';
 }
 
 function isCrocheter(role) {
-  return role === ROLES.WORKER;
+  return role === ROLES.WORKER || role === 'crocheter';
 }
 
 function canManageWorkers(role) {
