@@ -221,12 +221,24 @@ function AddUserModal({ onClose }) {
 
 // ─── User Management ──────────────────────────────────────────────────────────
 function UserManagement() {
+  const { user: authUser } = useAuthStore();
+  const qc = useQueryClient();
   const [addModal, setAddModal] = useState(false);
   const { data, isLoading } = useQuery({
     queryKey: ['workers'],
     queryFn: () => api.get('/workers').then(r => r.data),
   });
   const workers = data?.workers ?? data ?? [];
+
+  const deleteUserMutation = useMutation({
+    mutationFn: (id) => api.deleteWorker(id),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ['workers'] });
+      toast.success(res?.message || 'User deleted permanently');
+    },
+    onError: (err) => toast.error(err.response?.data?.error || 'Failed to delete user'),
+  });
+
   return (
     <div className="card">
       <div className="card-header">
@@ -240,11 +252,11 @@ function UserManagement() {
         <div className="table-wrapper">
           <table>
             <thead>
-              <tr><th>Name</th><th>Email</th><th>Role</th><th>Wage Mode</th><th>Status</th></tr>
+              <tr><th>Name</th><th>Email</th><th>Role</th><th>Wage Mode</th><th>Status</th><th className="text-right">Actions</th></tr>
             </thead>
             <tbody>
               {workers.length === 0
-                ? <tr><td colSpan={5} className="text-center text-slate-400 py-6">No users yet.</td></tr>
+                ? <tr><td colSpan={6} className="text-center text-slate-400 py-6">No users yet.</td></tr>
                 : workers.map(w => (
                   <tr key={w.id}>
                     <td className="font-medium">{w.name}</td>
@@ -255,6 +267,22 @@ function UserManagement() {
                       <span className={`badge ${w.status !== 'inactive' ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'}`}>
                         {w.status !== 'inactive' ? 'Active' : 'Inactive'}
                       </span>
+                    </td>
+                    <td className="text-right">
+                      {w.id !== authUser?.id && (
+                        <button
+                          onClick={() => {
+                            if (window.confirm(`Delete user "${w.name}"? This action cannot be undone.`)) {
+                              deleteUserMutation.mutate(w.id);
+                            }
+                          }}
+                          disabled={deleteUserMutation.isPending}
+                          className="btn-ghost btn-sm text-xs py-1 px-2 text-rose-600 hover:bg-rose-50"
+                          title="Delete User"
+                        >
+                          🗑️ Delete
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -658,6 +686,121 @@ function ConnectorStatus() {
   );
 }
 
+// ─── Danger Zone: Self Account Deletion ──────────────────────────────────────
+function DangerZone() {
+  const { user } = useAuthStore();
+  const [showModal, setShowModal] = useState(false);
+  const [confirmText, setConfirmText] = useState('');
+  const [password, setPassword] = useState('');
+
+  const deleteAccountMutation = useMutation({
+    mutationFn: (data) => api.deleteAccount(data),
+    onSuccess: () => {
+      toast.success('Your account has been deleted permanently.');
+      useAuthStore.getState().logout();
+      window.location.href = '/login';
+    },
+    onError: (err) => toast.error(err.response?.data?.error || 'Failed to delete account.'),
+  });
+
+  const isConfirmed =
+    confirmText.trim().toUpperCase() === 'DELETE' ||
+    (user?.email && confirmText.trim().toLowerCase() === user.email.toLowerCase()) ||
+    password.length > 0;
+
+  const handleDelete = (e) => {
+    e.preventDefault();
+    if (!isConfirmed) return;
+    deleteAccountMutation.mutate({ confirmText, password });
+  };
+
+  return (
+    <div className="card border-rose-200 bg-rose-50/20">
+      <div className="card-header border-rose-100">
+        <div>
+          <h2 className="font-semibold text-rose-800 flex items-center gap-2">
+            <span>⚠️ Danger Zone</span>
+          </h2>
+          <p className="text-slate-500 text-xs mt-0.5">Irreversible actions for your user account</p>
+        </div>
+      </div>
+
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 rounded-xl bg-white border border-rose-100">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-800">Delete Account</h3>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Permanently delete your user profile and login credentials. Financial and production records will preserve historical anonymity.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            setConfirmText('');
+            setPassword('');
+            setShowModal(true);
+          }}
+          className="btn-danger shrink-0 text-xs py-2 px-4"
+        >
+          🗑️ Delete My Account
+        </button>
+      </div>
+
+      {showModal && (
+        <Modal title="Delete Account Permanently" onClose={() => setShowModal(false)}>
+          <form onSubmit={handleDelete} className="space-y-4">
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 space-y-1">
+              <p className="font-bold">⚠️ Warning: This action cannot be undone.</p>
+              <p>Your profile data, active sessions, and direct portfolio items will be immediately and permanently removed.</p>
+            </div>
+
+            <div>
+              <label className="label text-xs">
+                To confirm, type <span className="font-bold text-rose-700">DELETE</span> or your account email (<span className="font-mono text-slate-600">{user?.email}</span>):
+              </label>
+              <input
+                type="text"
+                placeholder='Type "DELETE" or your email'
+                className="input text-sm"
+                value={confirmText}
+                onChange={(e) => setConfirmText(e.target.value)}
+                autoFocus
+              />
+            </div>
+
+            <div>
+              <label className="label text-xs">Account Password (Optional if confirmed with &quot;DELETE&quot; / Google OAuth)</label>
+              <input
+                type="password"
+                placeholder="Enter password (optional)"
+                className="input text-sm"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </div>
+
+            <div className="flex gap-2 justify-end pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setShowModal(false)}
+                className="btn-secondary text-xs"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={!isConfirmed || deleteAccountMutation.isPending}
+                className="btn-danger text-xs flex items-center gap-1.5"
+              >
+                {deleteAccountMutation.isPending ? 'Deleting…' : 'Confirm Permanent Deletion'}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export default function SettingsPage() {
   const { user } = useAuthStore();
@@ -693,6 +836,7 @@ export default function SettingsPage() {
       )}
 
       <ChangePassword />
+      <DangerZone />
     </div>
   );
 }

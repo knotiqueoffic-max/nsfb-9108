@@ -19,6 +19,11 @@ const api = axios.create({
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('knotique_token');
   if (token) config.headers.Authorization = `Bearer ${token}`;
+  // Ensure browser sets multipart/form-data boundary automatically when submitting FormData
+  if (config.data instanceof FormData) {
+    delete config.headers['Content-Type'];
+    delete config.headers['content-type'];
+  }
   return config;
 });
 
@@ -80,9 +85,7 @@ api.interceptors.response.use(
 
 // ─── Production Work Submissions & Approval API Methods ──────────────────────
 api.uploadSubmission = (requestId, formData) =>
-  api.post(`/production-requests/${requestId}/submissions`, formData, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  }).then((r) => r.data);
+  api.post(`/production-requests/${requestId}/submissions`, formData).then((r) => r.data);
 
 api.fetchSubmissions = (requestId) =>
   api.get(`/production-requests/${requestId}/submissions`).then((r) => r.data);
@@ -93,9 +96,22 @@ api.reviewSubmission = (requestId, submissionId, data) =>
 api.fetchApprovalsQueue = () =>
   api.get('/production-requests/approvals/queue').then((r) => r.data);
 
+// ─── Account & Subordinate Deletion API Methods ──────────────────────────────
+api.deleteAccount = (confirmData) =>
+  api.delete('/auth/account', { data: confirmData }).then((r) => r.data);
+
+api.deleteWorker = (workerId) =>
+  api.delete(`/workers/${workerId}`).then((r) => r.data);
+
+api.deleteSubvendor = (subvendorId) =>
+  api.delete(`/tenants/subvendors/${subvendorId}`).then((r) => r.data);
+
 export const uploadSubmission = api.uploadSubmission;
 export const fetchSubmissions = api.fetchSubmissions;
 export const reviewSubmission = api.reviewSubmission;
 export const fetchApprovalsQueue = api.fetchApprovalsQueue;
+export const deleteAccount = api.deleteAccount;
+export const deleteWorker = api.deleteWorker;
+export const deleteSubvendor = api.deleteSubvendor;
 
 export default api;

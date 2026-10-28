@@ -87,7 +87,8 @@ app.get('/api/health', (_req, res) => res.json({ status: 'ok', app: 'Knotique Sa
 // ─── Error Handler ────────────────────────────────────────────────────────────
 app.use((err, req, res, _next) => {
   console.error(err.stack);
-  res.status(err.status || 500).json({ error: err.message || 'Internal server error' });
+  const status = err.name === 'MulterError' ? 400 : (err.status || 500);
+  res.status(status).json({ error: err.message || 'Internal server error' });
 });
 
 const { initAutoBackupScheduler } = require('./services/backup.service');

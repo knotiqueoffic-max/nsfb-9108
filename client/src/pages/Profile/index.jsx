@@ -24,6 +24,19 @@ export default function Profile() {
   const [file, setFile] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
   const [previewImage, setPreviewImage] = useState(null);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [deletePassword, setDeletePassword] = useState('');
+
+  const deleteAccountMutation = useMutation({
+    mutationFn: (data) => api.deleteAccount(data),
+    onSuccess: () => {
+      toast.success('Your account has been deleted permanently.');
+      useAuthStore.getState().logout();
+      window.location.href = '/login';
+    },
+    onError: (err) => toast.error(err.response?.data?.error || 'Failed to delete account'),
+  });
 
   // Profile Form
   const { register, handleSubmit, formState: { errors } } = useForm({
@@ -177,6 +190,25 @@ export default function Profile() {
               </button>
             </form>
           </div>
+
+          {/* Danger Zone */}
+          <div className="card p-5 border-rose-200 bg-rose-50/20 space-y-3">
+            <h4 className="text-xs font-bold text-rose-800 uppercase tracking-wider">⚠️ Danger Zone</h4>
+            <p className="text-xs text-slate-500">
+              Permanently delete your account, crochet portfolio, and personal data.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setDeleteConfirmText('');
+                setDeletePassword('');
+                setShowDeleteModal(true);
+              }}
+              className="btn-danger w-full text-xs py-2"
+            >
+              🗑️ Delete My Account
+            </button>
+          </div>
         </div>
 
         {/* Right Column: Portfolio Showcase */}
@@ -311,6 +343,76 @@ export default function Profile() {
             >
               ✕ Close
             </button>
+          </div>
+        </div>
+      )}
+      {/* Delete Account Confirmation Modal */}
+      {showDeleteModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="font-semibold text-slate-800 text-base">Delete Account Permanently</h3>
+              <button onClick={() => setShowDeleteModal(false)} className="btn-ghost btn-sm p-1">✕</button>
+            </div>
+
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 space-y-1">
+              <p className="font-bold">⚠️ Warning: This action cannot be undone.</p>
+              <p>Your profile data, active sessions, and craft portfolio pieces will be permanently erased.</p>
+            </div>
+
+            <div>
+              <label className="label text-xs">
+                To confirm, type <span className="font-bold text-rose-700">DELETE</span> or your email (<span className="font-mono text-slate-600">{user?.email}</span>):
+              </label>
+              <input
+                type="text"
+                placeholder='Type "DELETE" or your email'
+                className="input text-sm"
+                value={deleteConfirmText}
+                onChange={(e) => setDeleteConfirmText(e.target.value)}
+                autoFocus
+              />
+            </div>
+
+            <div>
+              <label className="label text-xs">Password (Optional if confirmed with &quot;DELETE&quot; / Google OAuth)</label>
+              <input
+                type="password"
+                placeholder="Enter password (optional)"
+                className="input text-sm"
+                value={deletePassword}
+                onChange={(e) => setDeletePassword(e.target.value)}
+              />
+            </div>
+
+            <div className="flex gap-2 justify-end pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setShowDeleteModal(false)}
+                className="btn-secondary text-xs"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={
+                  (!deleteConfirmText.trim() && !deletePassword) ||
+                  (deleteConfirmText.trim().toUpperCase() !== 'DELETE' &&
+                    deleteConfirmText.trim().toLowerCase() !== user?.email?.toLowerCase() &&
+                    !deletePassword) ||
+                  deleteAccountMutation.isPending
+                }
+                onClick={() =>
+                  deleteAccountMutation.mutate({
+                    confirmText: deleteConfirmText,
+                    password: deletePassword,
+                  })
+                }
+                className="btn-danger text-xs flex items-center gap-1.5"
+              >
+                {deleteAccountMutation.isPending ? 'Deleting…' : 'Confirm Permanent Deletion'}
+              </button>
+            </div>
           </div>
         </div>
       )}

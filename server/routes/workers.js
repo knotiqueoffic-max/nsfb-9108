@@ -5,6 +5,7 @@ const db = require('../db/database');
 const { authenticate, workerManagerOnly, requireTenant } = require('../middleware/auth');
 const { ROLES, ACCOUNT_STATUS } = require('../constants/roles');
 const { logAuditEvent } = require('../services/audit.service');
+const { deleteUserSafely } = require('../services/user.service');
 
 router.use(authenticate);
 router.use(requireTenant);
@@ -176,46 +177,88 @@ router.put('/:id', workerManagerOnly, async (req, res) => {
   res.json(worker);
 });
 
-// DELETE /api/workers/:id — manager only; verify tenant
-router.delete('/:id', workerManagerOnly, async (req, res) => {
-  const workerId = req.params.id;
-  const worker = await db('users')
-    .where('id', workerId)
-    .where('tenant_id', req.tenant_id)
-    .first();
-  if (!worker) return res.status(404).json({ error: 'Worker not found' });
+// DELETE /api/workers/:id — Hierarchical deletion
+router.delete('/:id', async (req, res) => {
+  // Workers / crocheters are strictly forbidden from deleting users
+  if (req.user.role === ROLES.WORKER || req.user.role === 'crocheter') {
+    return res.status(403).json({ error: 'Access denied: Workers are not authorized to delete users' });
+  }
 
-  if (req.user.id === parseInt(workerId)) {
-    return res.status(400).json({ error: 'Cannot delete your own account' });
+  const workerId = parseInt(req.params.id, 10);
+  if (isNaN(workerId)) {
+    return res.status(400).json({ error: 'Invalid user ID' });
+  }
+
+  if (req.user.id === workerId) {
+    return res.status(400).json({ error: 'Cannot delete your own account via this endpoint. Please use Settings > Danger Zone.' });
+  }
+
+  const targetUser = await db('users').where('id', workerId).first();
+  if (!targetUser) return res.status(404).json({ error: 'User not found' });
+
+  // Cannot delete owners or super administrators
+  if ([ROLES.OWNER, ROLES.SUPER_ADMIN].includes(targetUser.role)) {
+    return res.status(403).json({ error: 'Cannot delete an organization owner or super administrator' });
+  }
+
+  // Enforce hierarchical deletion authorization
+  let isAuthorized = false;
+
+  if ([ROLES.OWNER, ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(req.user.role)) {
+    if (targetUser.tenant_id === req.tenant_id) {
+      isAuthorized = true;
+    } else {
+      // Check if targetUser belongs to a child tenant
+      const childTenant = await db('tenants')
+        .where('id', targetUser.tenant_id)
+        .where('parent_tenant_id', req.tenant_id)
+        .first();
+      if (childTenant) isAuthorized = true;
+    }
+  } else if (req.user.role === ROLES.VENDOR) {
+    if (targetUser.tenant_id === req.tenant_id) {
+      if ([ROLES.WORKER, 'crocheter', ROLES.SUBVENDOR].includes(targetUser.role)) {
+        isAuthorized = true;
+      }
+    } else {
+      const childTenant = await db('tenants')
+        .where('id', targetUser.tenant_id)
+        .where('parent_tenant_id', req.tenant_id)
+        .first();
+      if (childTenant && [ROLES.WORKER, 'crocheter'].includes(targetUser.role)) {
+        isAuthorized = true;
+      }
+    }
+  } else if (req.user.role === ROLES.SUBVENDOR) {
+    if (targetUser.tenant_id === req.tenant_id && [ROLES.WORKER, 'crocheter'].includes(targetUser.role)) {
+      isAuthorized = true;
+    }
+  }
+
+  if (!isAuthorized) {
+    return res.status(403).json({ error: 'Access denied: You do not have permission to delete this user' });
   }
 
   try {
-    await db('users').where('id', workerId).where('tenant_id', req.tenant_id).del();
+    await deleteUserSafely(targetUser.id);
+
     await logAuditEvent({
       tenant_id: req.tenant_id,
       user_id: req.user.id,
-      action: 'WORKER_PERMANENTLY_DELETED',
+      action: 'USER_DELETED_BY_MANAGER',
       target_type: 'users',
-      target_id: workerId,
+      target_id: targetUser.id,
       ip_address: req.ip,
+      details: {
+        deleted_user_email: targetUser.email,
+        deleted_user_role: targetUser.role,
+      },
     });
-    res.json({ message: 'User deleted permanently' });
+
+    res.json({ message: 'User deleted successfully' });
   } catch (err) {
-    // If foreign key constraints exist on production entries/orders, deactivate and revoke sessions
-    await db('users').where('id', workerId).where('tenant_id', req.tenant_id).update({
-      is_active: false,
-      status: ACCOUNT_STATUS.SUSPENDED,
-      token_version: (worker.token_version || 1) + 1,
-    });
-    await logAuditEvent({
-      tenant_id: req.tenant_id,
-      user_id: req.user.id,
-      action: 'WORKER_DEACTIVATED',
-      target_type: 'users',
-      target_id: workerId,
-      ip_address: req.ip,
-    });
-    res.json({ message: 'Worker deactivated (historical logs preserved)' });
+    console.error('[Delete Worker Error]:', err);
+    res.status(500).json({ error: 'Failed to delete user safely' });
   }
 });
 

@@ -1019,7 +1019,8 @@ router.post('/:id/review', [
 router.post(
   '/:id/submissions',
   (req, res, next) => {
-    uploadSubmissionMedia.array('files', 10)(req, res, (err) => {
+    // Accept files under 'files', 'media', or any field name up to 10 files
+    uploadSubmissionMedia.any()(req, res, (err) => {
       if (err) {
         return res.status(400).json({ error: err.message || 'Media file upload failed' });
       }
@@ -1031,9 +1032,21 @@ router.post(
     if (!request) return res.status(404).json({ error: 'Production request not found' });
 
     // Authorization: Caller must be the actual awarded recipient (worker/crocheter or vendor)
-    const isAwardee =
+    let isAwardee =
       (request.awarded_to_type === 'user' && (request.awarded_to_id === req.user.id || String(request.awarded_to_id) === String(req.user.id))) ||
       (request.awarded_to_type === 'tenant' && (request.awarded_to_id === req.tenant_id || String(request.awarded_to_id) === String(req.tenant_id)));
+
+    // Fallback: Check if caller placed the awarded bid
+    if (!isAwardee && request.awarded_bid_id) {
+      const awardedBid = await db('production_bids').where('id', request.awarded_bid_id).first();
+      if (
+        awardedBid &&
+        (awardedBid.bidder_user_id === req.user.id ||
+          (awardedBid.bidder_type === 'user' && String(awardedBid.bidder_id) === String(req.user.id)))
+      ) {
+        isAwardee = true;
+      }
+    }
 
     if (!isAwardee) {
       return res.status(403).json({ error: 'Access denied: Only the awarded recipient can upload work submissions' });
@@ -1045,6 +1058,9 @@ router.post(
       PRODUCTION_REQUEST_STATUS.ACCEPTED,
       PRODUCTION_REQUEST_STATUS.IN_PROGRESS,
       PRODUCTION_REQUEST_STATUS.SUBMITTED_FOR_REVIEW,
+      'assigned',
+      'changes_requested',
+      'pending_approval',
     ];
     if (!allowedStatuses.includes(request.status)) {
       return res.status(400).json({

@@ -6,6 +6,7 @@ const { generateToken, authenticate, adminOnly, requireTenant } = require('../mi
 const { ROLES, ACCOUNT_STATUS, canAssignRole } = require('../constants/roles');
 const { logAuditEvent } = require('../services/audit.service');
 const { verifyGoogleToken, getGoogleClientId, GoogleAuthError } = require('../services/google.service');
+const { deleteUserSafely } = require('../services/user.service');
 
 // ─── Helper: build tenant-enriched user object ────────────────────────────────
 async function buildUserResponse(user) {
@@ -564,5 +565,54 @@ router.post('/google-login', async (req, res) => {
     res.status(500).json({ error: 'Failed to authenticate with Google. Please try again.' });
   }
 });
+
+// ─── DELETE /api/auth/account (and alias /me) — Self-deletion ──────────────────
+const handleAccountDeletion = async (req, res) => {
+  const { confirmText, password } = req.body || {};
+  const user = await db('users').where('id', req.user.id).first();
+  if (!user) return res.status(404).json({ error: 'User not found' });
+
+  // Confirmation can be provided via "DELETE", the user's email, or valid password (for password accounts)
+  const isConfirmedByText =
+    confirmText &&
+    (String(confirmText).trim().toUpperCase() === 'DELETE' ||
+      String(confirmText).trim().toLowerCase() === user.email.toLowerCase());
+
+  if (!isConfirmedByText) {
+    if (user.password_hash) {
+      if (!password) {
+        return res.status(400).json({
+          error: 'Confirmation required. Please type "DELETE" or enter your account password to confirm deletion.',
+        });
+      }
+      const isMatch = await bcrypt.compare(password, user.password_hash);
+      if (!isMatch) {
+        return res.status(401).json({ error: 'Incorrect password' });
+      }
+    } else {
+      // Google OAuth user without password
+      return res.status(400).json({
+        error: 'Confirmation required. Please type "DELETE" or your email address to confirm account deletion.',
+      });
+    }
+  }
+
+  await logAuditEvent({
+    tenant_id: user.tenant_id,
+    user_id: user.id,
+    action: 'USER_ACCOUNT_SELF_DELETED',
+    target_type: 'users',
+    target_id: user.id,
+    ip_address: req.ip,
+    details: { email: user.email, role: user.role },
+  });
+
+  await deleteUserSafely(user.id);
+
+  res.json({ message: 'Your account and data have been deleted successfully.' });
+};
+
+router.delete('/account', authenticate, handleAccountDeletion);
+router.delete('/me', authenticate, handleAccountDeletion);
 
 module.exports = router;

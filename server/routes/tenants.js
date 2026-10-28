@@ -3,6 +3,7 @@ const db = require('../db/database');
 const { authenticate, ownerOnly, requireTenant, workerManagerOnly } = require('../middleware/auth');
 const { ROLES, TENANT_TYPES, RELATIONSHIP_TYPES } = require('../constants/roles');
 const { logAuditEvent } = require('../services/audit.service');
+const { deleteUserSafely } = require('../services/user.service');
 
 router.use(authenticate);
 router.use(requireTenant);
@@ -191,6 +192,66 @@ router.get('/subvendors', workerManagerOnly, async (req, res) => {
     .select('id', 'name', 'slug', 'business_category', 'status', 'created_at');
 
   res.json(subvendors);
+});
+
+// ─── DELETE /api/tenants/subvendors/:id — delete a subvendor organization ─────
+router.delete('/subvendors/:id', workerManagerOnly, async (req, res) => {
+  const subvendorId = req.params.id;
+  const subvendor = await db('tenants').where('id', subvendorId).first();
+  if (!subvendor) {
+    return res.status(404).json({ error: 'Subvendor organization not found' });
+  }
+
+  // Verify hierarchy: caller must be Admin/Owner or the parent Vendor
+  const isParentVendor = subvendor.parent_tenant_id === req.tenant_id;
+  const isAdminOrOwner = [ROLES.OWNER, ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(req.user.role);
+
+  if (!isParentVendor && !isAdminOrOwner) {
+    return res.status(403).json({ error: 'Access denied: You do not have permission to delete this subvendor' });
+  }
+
+  await db.transaction(async (trx) => {
+    // 1. Delete all users belonging to this subvendor
+    const subvendorUsers = await trx('users').where('tenant_id', subvendor.id).select('id');
+    for (const u of subvendorUsers) {
+      await deleteUserSafely(u.id, trx);
+    }
+
+    // 2. Remove organization relationships
+    if (await trx.schema.hasTable('organization_relationships')) {
+      await trx('organization_relationships')
+        .where('child_tenant_id', subvendor.id)
+        .orWhere('parent_tenant_id', subvendor.id)
+        .del();
+    }
+
+    // 3. Clear or nullify any production requests issued by this subvendor
+    if (await trx.schema.hasTable('production_requests')) {
+      await trx('production_requests')
+        .where('tenant_id', subvendor.id)
+        .update({ status: 'cancelled' });
+    }
+
+    // 4. Delete settings
+    if (await trx.schema.hasTable('settings')) {
+      await trx('settings').where('tenant_id', subvendor.id).del();
+    }
+
+    // 5. Delete tenant record
+    await trx('tenants').where('id', subvendor.id).del();
+  });
+
+  await logAuditEvent({
+    tenant_id: req.tenant_id,
+    user_id: req.user.id,
+    action: 'SUBVENDOR_ORGANIZATION_DELETED',
+    target_type: 'tenants',
+    target_id: subvendor.id,
+    ip_address: req.ip,
+    details: { name: subvendor.name, slug: subvendor.slug },
+  });
+
+  res.json({ message: 'Subvendor organization and all associated users deleted successfully' });
 });
 
 // ─── GET /api/tenants/relationships — list all organization relationships ──────

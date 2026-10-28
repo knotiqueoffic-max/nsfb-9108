@@ -32,11 +32,16 @@ const csvStorage = multer.diskStorage({
 
 // Production work submissions storage (photos and videos)
 const submissionStorage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, SUBMISSIONS_DIR),
+  destination: (_req, _file, cb) => {
+    if (!fs.existsSync(SUBMISSIONS_DIR)) {
+      fs.mkdirSync(SUBMISSIONS_DIR, { recursive: true });
+    }
+    cb(null, SUBMISSIONS_DIR);
+  },
   filename: (_req, file, cb) => {
     const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-    const ext = path.extname(file.originalname).toLowerCase();
-    cb(null, `submission-${unique}${ext}`);
+    const ext = (path.extname(file.originalname) || '').toLowerCase().replace(/[^a-z0-9.]/gi, '');
+    cb(null, `submission-${unique}${ext || '.bin'}`);
   },
 });
 
@@ -60,16 +65,16 @@ const csvFilter = (_req, file, cb) => {
 
 // Validates images and videos for proof-of-work submissions
 const submissionMediaFilter = (_req, file, cb) => {
-  const allowedExts = /\.(jpe?g|png|webp|mp4|webm|mov)$/i;
-  const allowedMimes = /^(image\/(jpeg|png|webp)|video\/(mp4|webm|quicktime))$/i;
+  const allowedExts = /\.(jpe?g|png|webp|gif|mp4|webm|mov|quicktime|mkv)$/i;
+  const allowedMimes = /^(image\/(jpeg|png|webp|gif)|video\/(mp4|webm|quicktime|x-matroska)|application\/octet-stream)$/i;
 
   const ext = path.extname(file.originalname).toLowerCase();
   const mime = (file.mimetype || '').toLowerCase();
 
-  if (allowedExts.test(ext) && allowedMimes.test(mime)) {
+  if (allowedExts.test(ext) || allowedMimes.test(mime)) {
     cb(null, true);
   } else {
-    cb(new Error('Invalid file type. Only JPEG, PNG, WEBP images and MP4, WebM, QuickTime videos are allowed.'));
+    cb(new Error('Invalid file type. Only JPEG, PNG, WEBP, GIF images and MP4, WebM, MOV videos are allowed.'));
   }
 };
 

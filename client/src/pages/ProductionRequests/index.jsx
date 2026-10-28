@@ -58,7 +58,7 @@ export default function ProductionRequests() {
   const qc = useQueryClient();
 
   const isManager = ['owner', 'admin', 'vendor', 'subvendor', 'super_admin'].includes(user?.role);
-  const isCrocheter = user?.role === 'worker';
+  const isCrocheter = user?.role === 'worker' || user?.role === 'crocheter';
   const isVendor = user?.role === 'vendor';
   const isSubvendor = user?.role === 'subvendor';
   const isAdmin = ['owner', 'admin', 'super_admin'].includes(user?.role);
@@ -84,9 +84,11 @@ export default function ProductionRequests() {
   const [filePreviews, setFilePreviews] = useState([]);
   const [submissionNotes, setSubmissionNotes] = useState('');
   const [submissionQty, setSubmissionQty] = useState('');
+  const [uploadConsent, setUploadConsent] = useState(false);
   const [lightboxMedia, setLightboxMedia] = useState(null);
   const [reviewNotesMap, setReviewNotesMap] = useState({});
   const fileInputRef = useRef(null);
+  const cameraInputRef = useRef(null);
 
   // Queries
   const { data: issuedData, isLoading: issuedLoading } = useQuery({
@@ -257,9 +259,7 @@ export default function ProductionRequests() {
       files.forEach((f) => fd.append('files', f));
       if (notes) fd.append('notes', notes);
       if (quantity_completed) fd.append('quantity_completed', quantity_completed);
-      return api.post(`/production-requests/${requestId}/submissions`, fd, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      }).then((r) => r.data);
+      return api.uploadSubmission(requestId, fd);
     },
     onSuccess: (data) => {
       toast.success(data?.message || 'Proof of work submitted successfully for approval!');
@@ -271,6 +271,7 @@ export default function ProductionRequests() {
       setFilePreviews([]);
       setSubmissionNotes('');
       setSubmissionQty('');
+      setUploadConsent(false);
     },
     onError: (err) => toast.error(err.response?.data?.error || 'Failed to upload work submission'),
   });
@@ -425,7 +426,7 @@ export default function ProductionRequests() {
                         </div>
                         <div>
                           <span className="text-slate-400 block">Bids Received</span>
-                          <span className="font-bold text-violet-700">{req.bids_count || 0}</span>
+                          <span className="font-bold text-violet-700">{req.bid_count ?? req.bids_count ?? 0}</span>
                         </div>
                         <div>
                           <span className="text-slate-400 block">Deadline</span>
@@ -439,7 +440,7 @@ export default function ProductionRequests() {
                         onClick={() => setSelectedRequestId(req.id)}
                         className="btn-primary btn-sm flex-1 py-1.5 text-xs text-center justify-center"
                       >
-                        Inspect Details & Bids ({req.bids_count || 0})
+                        Inspect Details & Bids ({req.bid_count ?? req.bids_count ?? 0})
                       </button>
                     </div>
                   </div>
@@ -483,8 +484,8 @@ export default function ProductionRequests() {
               {receivedRequests.map((req) => {
                 const badge = STATUS_BADGES[req.status] || { label: req.status, bg: 'bg-slate-100 text-slate-600' };
                 const hasMyBid = !!req.my_bid;
-                const isAwardedToMe = req.my_bid?.status === 'awarded';
-                const isAcceptedByMe = req.my_bid?.status === 'accepted';
+                const isAwardedToMe = req.my_bid?.status === 'awarded' || (req.awarded_to_type === 'user' && String(req.awarded_to_id) === String(user?.id) && req.status === 'awarded');
+                const isAcceptedByMe = req.my_bid?.status === 'accepted' || (req.awarded_to_type === 'user' && String(req.awarded_to_id) === String(user?.id) && ['accepted', 'in_progress', 'submitted_for_review'].includes(req.status));
 
                 return (
                   <div key={req.id} className="card hover:shadow-md transition-shadow flex flex-col justify-between border-slate-200">
@@ -577,7 +578,7 @@ export default function ProductionRequests() {
                       )}
 
                       {/* Post-Award Upload Work for Approval (Crocheters) */}
-                      {isAcceptedByMe && ['accepted', 'in_progress'].includes(req.status) && (
+                      {isAcceptedByMe && ['accepted', 'in_progress', 'submitted_for_review'].includes(req.status) && (
                         <div className="flex flex-col gap-1.5">
                           <button
                             onClick={() => {
@@ -785,28 +786,50 @@ export default function ProductionRequests() {
               </p>
             </div>
 
-            {/* File Selector */}
+            {/* File & Camera Selectors */}
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
                 Photos & Videos Proof (Max 50MB per file) *
               </label>
 
-              <div
-                onClick={() => fileInputRef.current?.click()}
-                className="border-2 border-dashed border-slate-300 hover:border-violet-500 rounded-2xl p-6 text-center cursor-pointer transition-colors bg-slate-50/50 hover:bg-violet-50/20"
-              >
-                <p className="text-3xl mb-1">📸</p>
-                <p className="text-sm font-semibold text-slate-700">Click to select photos or videos</p>
-                <p className="text-xs text-slate-400 mt-1">Supports JPEG, PNG, WEBP images and MP4, WebM, MOV videos</p>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  multiple
-                  accept="image/jpeg,image/png,image/webp,video/mp4,video/webm,video/quicktime"
-                  onChange={handleFilesChosen}
-                  className="hidden"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-2">
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="p-4 border-2 border-dashed border-slate-300 hover:border-violet-500 rounded-2xl text-center cursor-pointer transition-colors bg-slate-50/50 hover:bg-violet-50/20 flex flex-col items-center justify-center gap-1"
+                >
+                  <span className="text-2xl">📁</span>
+                  <span className="text-sm font-semibold text-slate-700">Browse Files</span>
+                  <span className="text-[11px] text-slate-400">From device gallery or storage</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => cameraInputRef.current?.click()}
+                  className="p-4 border-2 border-dashed border-slate-300 hover:border-emerald-500 rounded-2xl text-center cursor-pointer transition-colors bg-slate-50/50 hover:bg-emerald-50/20 flex flex-col items-center justify-center gap-1"
+                >
+                  <span className="text-2xl">📷</span>
+                  <span className="text-sm font-semibold text-slate-700">Take Photo / Video</span>
+                  <span className="text-[11px] text-slate-400">Capture directly with camera</span>
+                </button>
               </div>
+
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,video/quicktime"
+                onChange={handleFilesChosen}
+                className="hidden"
+              />
+              <input
+                ref={cameraInputRef}
+                type="file"
+                accept="image/*,video/*"
+                capture="environment"
+                onChange={handleFilesChosen}
+                className="hidden"
+              />
             </div>
 
             {/* Selected File Previews */}
@@ -869,6 +892,21 @@ export default function ProductionRequests() {
               />
             </div>
 
+            {/* Security & Authenticity Consent Checkbox */}
+            <div className="p-3 bg-amber-50/80 border border-amber-200/80 rounded-xl">
+              <label className="flex items-start gap-2.5 text-xs text-amber-900 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={uploadConsent}
+                  onChange={(e) => setUploadConsent(e.target.checked)}
+                  className="rounded text-amber-600 focus:ring-amber-500 mt-0.5"
+                />
+                <span className="leading-relaxed">
+                  I confirm that these photos/videos represent my authentic proof-of-work for this production order and understand they will be submitted for administrative review and audit.
+                </span>
+              </label>
+            </div>
+
             {/* Actions */}
             <div className="flex gap-2 justify-end pt-3 border-t border-slate-100">
               <button
@@ -880,7 +918,7 @@ export default function ProductionRequests() {
               </button>
               <button
                 type="button"
-                disabled={selectedFiles.length === 0 || uploadSubmissionMutation.isPending}
+                disabled={selectedFiles.length === 0 || !uploadConsent || uploadSubmissionMutation.isPending}
                 onClick={() =>
                   uploadSubmissionMutation.mutate({
                     requestId: uploadModalRequest.id,
@@ -889,7 +927,7 @@ export default function ProductionRequests() {
                     quantity_completed: submissionQty,
                   })
                 }
-                className="btn-primary bg-emerald-600 hover:bg-emerald-700 flex items-center gap-2"
+                className="btn-primary bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-2"
               >
                 {uploadSubmissionMutation.isPending ? (
                   <>
@@ -1004,7 +1042,7 @@ export default function ProductionRequests() {
                 )}
                 {selectedTargetRole === 'worker' && (
                   <select multiple className="input h-24 text-xs" {...regCreate('recipient_ids')}>
-                    {(crochetersData?.workers || []).map(w => (
+                    {(Array.isArray(crochetersData) ? crochetersData : (crochetersData?.workers || [])).map(w => (
                       <option key={w.id} value={w.id}>{w.name} ({w.email})</option>
                     ))}
                   </select>
