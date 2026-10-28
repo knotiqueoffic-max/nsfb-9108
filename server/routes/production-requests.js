@@ -10,6 +10,7 @@ const {
   canCreateProductionRequest,
 } = require('../constants/roles');
 const { logAuditEvent } = require('../services/audit.service');
+const { uploadSubmissionMedia } = require('../middleware/upload');
 
 router.use(authenticate);
 router.use(requireTenant);
@@ -329,6 +330,53 @@ router.get('/', async (req, res) => {
   res.json({ requests: result });
 });
 
+// ─── 2.5 GET /api/production-requests/approvals/queue — Admin approval queue ────
+router.get('/approvals/queue', async (req, res) => {
+  const isManager = [ROLES.OWNER, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.VENDOR, ROLES.SUBVENDOR].includes(req.user.role);
+  if (!isManager) {
+    return res.status(403).json({ error: 'Access denied: Only managers and admins can access the approval queue' });
+  }
+
+  const pendingSubmissions = await db('production_submissions as ps')
+    .join('production_requests as pr', 'ps.production_request_id', 'pr.id')
+    .leftJoin('products as p', 'pr.product_id', 'p.id')
+    .leftJoin('users as u', 'ps.worker_id', 'u.id')
+    .where('ps.tenant_id', req.tenant_id)
+    .where('ps.status', 'pending_approval')
+    .select(
+      'ps.*',
+      'pr.request_code',
+      'pr.title as request_title',
+      'pr.quantity as request_quantity',
+      'pr.unit as request_unit',
+      'pr.status as request_status',
+      'p.name as product_name',
+      'p.sku as product_sku',
+      'u.name as worker_name',
+      'u.email as worker_email'
+    )
+    .orderBy('ps.created_at', 'desc');
+
+  const submissionIds = pendingSubmissions.map((s) => s.id);
+  let mediaMap = {};
+  if (submissionIds.length > 0) {
+    const allMedia = await db('production_submission_media')
+      .whereIn('submission_id', submissionIds)
+      .orderBy('id', 'asc');
+    allMedia.forEach((m) => {
+      if (!mediaMap[m.submission_id]) mediaMap[m.submission_id] = [];
+      mediaMap[m.submission_id].push(m);
+    });
+  }
+
+  const queue = pendingSubmissions.map((s) => ({
+    ...s,
+    media: mediaMap[s.id] || [],
+  }));
+
+  res.json({ queue });
+});
+
 // ─── 3. GET /api/production-requests/:id — Single request details ──────────────
 router.get('/:id', async (req, res) => {
   const request = await db('production_requests as pr')
@@ -359,11 +407,30 @@ router.get('/:id', async (req, res) => {
       .where('request_id', request.id)
       .orderBy('created_at', 'desc');
 
+    let submissions = await db('production_submissions as ps')
+      .leftJoin('users as u', 'ps.worker_id', 'u.id')
+      .leftJoin('users as rev', 'ps.reviewed_by', 'rev.id')
+      .where('ps.production_request_id', request.id)
+      .select('ps.*', 'u.name as worker_name', 'rev.name as reviewer_name')
+      .orderBy('ps.created_at', 'desc');
+
+    const subIds = submissions.map((s) => s.id);
+    if (subIds.length > 0) {
+      const allMedia = await db('production_submission_media').whereIn('submission_id', subIds).orderBy('id', 'asc');
+      const mediaMap = {};
+      allMedia.forEach((m) => {
+        if (!mediaMap[m.submission_id]) mediaMap[m.submission_id] = [];
+        mediaMap[m.submission_id].push(m);
+      });
+      submissions = submissions.map((s) => ({ ...s, media: mediaMap[s.id] || [] }));
+    }
+
     return res.json({
       request,
       is_issuer: true,
       bids,
       progress_logs: progressLogs,
+      submissions,
     });
   }
 
@@ -392,12 +459,35 @@ router.get('/:id', async (req, res) => {
       .orderBy('created_at', 'desc');
   }
 
+  // Submissions history for awardee
+  let submissions = [];
+  if (isAwardee) {
+    submissions = await db('production_submissions as ps')
+      .leftJoin('users as u', 'ps.worker_id', 'u.id')
+      .leftJoin('users as rev', 'ps.reviewed_by', 'rev.id')
+      .where('ps.production_request_id', request.id)
+      .select('ps.*', 'u.name as worker_name', 'rev.name as reviewer_name')
+      .orderBy('ps.created_at', 'desc');
+
+    const subIds = submissions.map((s) => s.id);
+    if (subIds.length > 0) {
+      const allMedia = await db('production_submission_media').whereIn('submission_id', subIds).orderBy('id', 'asc');
+      const mediaMap = {};
+      allMedia.forEach((m) => {
+        if (!mediaMap[m.submission_id]) mediaMap[m.submission_id] = [];
+        mediaMap[m.submission_id].push(m);
+      });
+      submissions = submissions.map((s) => ({ ...s, media: mediaMap[s.id] || [] }));
+    }
+  }
+
   res.json({
     request,
     is_issuer: false,
     my_bid: myBid || null,
     is_awardee: isAwardee,
     progress_logs: progressLogs,
+    submissions,
   });
 });
 
@@ -880,6 +970,251 @@ router.post('/:id/review', [
 
   res.json({ message: 'Correction requested and notification sent to recipient' });
 });
+
+// ─── 9.1 POST /api/production-requests/:id/submissions — Upload work for approval ──
+router.post(
+  '/:id/submissions',
+  (req, res, next) => {
+    uploadSubmissionMedia.array('files', 10)(req, res, (err) => {
+      if (err) {
+        return res.status(400).json({ error: err.message || 'Media file upload failed' });
+      }
+      next();
+    });
+  },
+  async (req, res) => {
+    const request = await db('production_requests').where('id', req.params.id).first();
+    if (!request) return res.status(404).json({ error: 'Production request not found' });
+
+    // Authorization: Caller must be the actual awarded recipient (worker/crocheter or vendor)
+    const isAwardee =
+      (request.awarded_to_type === 'user' && request.awarded_to_id === req.user.id) ||
+      (request.awarded_to_type === 'tenant' && request.awarded_to_id === req.tenant_id);
+
+    if (!isAwardee) {
+      return res.status(403).json({ error: 'Access denied: Only the awarded recipient can upload work submissions' });
+    }
+
+    // Must be in an active post-award state
+    const allowedStatuses = [
+      PRODUCTION_REQUEST_STATUS.AWARDED,
+      PRODUCTION_REQUEST_STATUS.ACCEPTED,
+      PRODUCTION_REQUEST_STATUS.IN_PROGRESS,
+      PRODUCTION_REQUEST_STATUS.SUBMITTED_FOR_REVIEW,
+    ];
+    if (!allowedStatuses.includes(request.status)) {
+      return res.status(400).json({
+        error: `Cannot upload work submissions: request is in '${request.status}' state. Only active accepted orders accept submissions.`,
+      });
+    }
+
+    // Must have at least 1 file uploaded
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ error: 'At least one photo or video file is required for proof of work' });
+    }
+
+    const { notes, quantity_completed } = req.body;
+    const parsedQty = quantity_completed ? parseInt(quantity_completed, 10) : 0;
+
+    // A worker can submit uploads unlimited times. Every submission creates a new record.
+    const submissionResult = await db('production_submissions').insert({
+      production_request_id: request.id,
+      worker_id: req.user.id,
+      tenant_id: request.tenant_id,
+      notes: notes ? String(notes).trim() : null,
+      quantity_completed: parsedQty >= 0 ? parsedQty : 0,
+      status: 'pending_approval',
+      created_at: db.fn.now(),
+      updated_at: db.fn.now(),
+    });
+
+    const submissionId = typeof submissionResult[0] === 'object' ? submissionResult[0].id : submissionResult[0];
+
+    const mediaRows = req.files.map((file) => {
+      const isVideo = (file.mimetype || '').startsWith('video/');
+      return {
+        submission_id: submissionId,
+        file_url: `/uploads/submissions/${file.filename}`,
+        file_type: isVideo ? 'video' : 'image',
+        mime_type: file.mimetype || (isVideo ? 'video/mp4' : 'image/jpeg'),
+        original_name: file.originalname || file.filename,
+        file_size: file.size || 0,
+        created_at: new Date().toISOString(),
+      };
+    });
+
+    await db('production_submission_media').insert(mediaRows);
+
+    // Update request status to 'in_progress' if currently 'accepted'
+    if (request.status === PRODUCTION_REQUEST_STATUS.ACCEPTED) {
+      await db('production_requests').where('id', request.id).update({
+        status: PRODUCTION_REQUEST_STATUS.IN_PROGRESS,
+        updated_at: db.fn.now(),
+      });
+    }
+
+    // Log progress history
+    await db('production_progress_logs').insert({
+      request_id: request.id,
+      logged_by: req.user.id,
+      quantity_completed: parsedQty,
+      notes: `Uploaded proof of work (${req.files.length} media file(s)): ${notes || 'Work submitted for review'}`,
+      status: PRODUCTION_PROGRESS_STATUS.SUBMITTED_FOR_REVIEW,
+      created_at: db.fn.now(),
+    });
+
+    await logAuditEvent({
+      tenant_id: request.tenant_id,
+      user_id: req.user.id,
+      action: 'PRODUCTION_WORK_SUBMITTED_FOR_APPROVAL',
+      target_type: 'production_requests',
+      target_id: request.id,
+      ip_address: req.ip,
+      details: {
+        submission_id: submissionId,
+        media_count: req.files.length,
+        quantity_completed: parsedQty,
+        notes,
+      },
+    });
+
+    res.status(201).json({
+      message: 'Proof of work submitted successfully! A production approval request has been created for admin review.',
+      submission_id: submissionId,
+      media_count: req.files.length,
+      files: mediaRows,
+    });
+  }
+);
+
+// ─── 9.2 GET /api/production-requests/:id/submissions — View submission history ──
+router.get('/:id/submissions', async (req, res) => {
+  const request = await db('production_requests').where('id', req.params.id).first();
+  if (!request) return res.status(404).json({ error: 'Production request not found' });
+
+  const isIssuer = request.tenant_id === req.tenant_id && req.user.role !== ROLES.WORKER;
+  const isAwardee =
+    (request.awarded_to_type === 'user' && request.awarded_to_id === req.user.id) ||
+    (request.awarded_to_type === 'tenant' && request.awarded_to_id === req.tenant_id);
+
+  // Strict Authorization & Privacy:
+  // Only the issuing organization or the awarded recipient can view submissions
+  if (!isIssuer && !isAwardee) {
+    return res.status(403).json({ error: 'Access denied: You are not authorized to view submissions for this request' });
+  }
+
+  const submissions = await db('production_submissions as ps')
+    .leftJoin('users as u', 'ps.worker_id', 'u.id')
+    .leftJoin('users as rev', 'ps.reviewed_by', 'rev.id')
+    .where('ps.production_request_id', request.id)
+    .select(
+      'ps.*',
+      'u.name as worker_name',
+      'u.email as worker_email',
+      'rev.name as reviewer_name'
+    )
+    .orderBy('ps.created_at', 'desc');
+
+  const submissionIds = submissions.map((s) => s.id);
+  let mediaMap = {};
+  if (submissionIds.length > 0) {
+    const allMedia = await db('production_submission_media')
+      .whereIn('submission_id', submissionIds)
+      .orderBy('id', 'asc');
+    allMedia.forEach((m) => {
+      if (!mediaMap[m.submission_id]) mediaMap[m.submission_id] = [];
+      mediaMap[m.submission_id].push(m);
+    });
+  }
+
+  const result = submissions.map((s) => ({
+    ...s,
+    media: mediaMap[s.id] || [],
+  }));
+
+  res.json({ submissions: result });
+});
+
+// ─── 9.3 PATCH /api/production-requests/:id/submissions/:submissionId/review ─────
+router.patch(
+  '/:id/submissions/:submissionId/review',
+  [
+    body('status').isIn(['approved', 'rejected', 'changes_requested']).withMessage("Status must be 'approved', 'rejected', or 'changes_requested'"),
+    body('reviewer_notes').optional().trim(),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    const request = await db('production_requests').where('id', req.params.id).first();
+    if (!request) return res.status(404).json({ error: 'Production request not found' });
+
+    // Authorization: STRICTLY restricted to the Admin / Issuer who owns the request.
+    // Crocheters / workers MUST NOT be able to review their own work.
+    const isIssuer = request.tenant_id === req.tenant_id;
+    const isManagerRole = [ROLES.OWNER, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.VENDOR, ROLES.SUBVENDOR].includes(req.user.role);
+
+    if (!isIssuer || !isManagerRole || req.user.role === ROLES.WORKER) {
+      return res.status(403).json({ error: 'Access denied: Only authorized administrators or request issuers can review submissions' });
+    }
+
+    const submission = await db('production_submissions')
+      .where('id', req.params.submissionId)
+      .where('production_request_id', request.id)
+      .first();
+
+    if (!submission) {
+      return res.status(404).json({ error: 'Submission not found on this production request' });
+    }
+
+    const { status, reviewer_notes } = req.body;
+    const normalizedStatus = status === 'changes_requested' ? 'rejected' : status;
+
+    await db.transaction(async (trx) => {
+      await trx('production_submissions')
+        .where('id', submission.id)
+        .update({
+          status: normalizedStatus,
+          reviewer_notes: reviewer_notes || null,
+          reviewed_by: req.user.id,
+          reviewed_at: db.fn.now(),
+          updated_at: db.fn.now(),
+        });
+
+      // Insert progress log feedback
+      await trx('production_progress_logs').insert({
+        request_id: request.id,
+        logged_by: req.user.id,
+        quantity_completed: normalizedStatus === 'approved' ? (submission.quantity_completed || 0) : 0,
+        notes: `Submission #${submission.id} ${normalizedStatus === 'approved' ? 'Approved' : 'Changes Requested'}: ${reviewer_notes || 'Reviewed by admin'}`,
+        status: normalizedStatus === 'approved' ? PRODUCTION_PROGRESS_STATUS.APPROVED : PRODUCTION_PROGRESS_STATUS.CORRECTION_REQUESTED,
+        feedback: reviewer_notes || null,
+        created_at: db.fn.now(),
+      });
+    });
+
+    await logAuditEvent({
+      tenant_id: req.tenant_id,
+      user_id: req.user.id,
+      action: 'PRODUCTION_SUBMISSION_REVIEWED',
+      target_type: 'production_submissions',
+      target_id: submission.id,
+      ip_address: req.ip,
+      details: {
+        request_id: request.id,
+        status: normalizedStatus,
+        reviewer_notes,
+      },
+    });
+
+    res.json({
+      message: normalizedStatus === 'approved' ? 'Work submission approved successfully!' : 'Changes requested on work submission.',
+      submission_id: submission.id,
+      status: normalizedStatus,
+      reviewer_notes,
+    });
+  }
+);
 
 // ─── 10. POST /api/production-requests/:id/cancel — Issuer cancels request ─────
 router.post('/:id/cancel', async (req, res) => {

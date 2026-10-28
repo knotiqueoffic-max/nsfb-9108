@@ -91,6 +91,28 @@ router.get('/', async (req, res) => {
           timestamp: new Date().toISOString(),
         });
       }
+
+      // 5. Pending production work approval requests
+      const hasSubmissionsTable = await db.schema.hasTable('production_submissions');
+      if (hasSubmissionsTable) {
+        const pendingSubmissions = await db('production_submissions')
+          .where('tenant_id', tid)
+          .where('status', 'pending_approval')
+          .count('id as count')
+          .first();
+
+        if (pendingSubmissions && parseInt(pendingSubmissions.count) > 0) {
+          alerts.push({
+            id: 'pending-work-approvals',
+            type: 'production_approval',
+            severity: 'info',
+            title: 'Production Approval Requests',
+            message: `${pendingSubmissions.count} worker work submission(s) awaiting your review and approval.`,
+            link: '/production-requests',
+            timestamp: new Date().toISOString(),
+          });
+        }
+      }
     }
 
     // 5. Worker assigned tasks (for workers)

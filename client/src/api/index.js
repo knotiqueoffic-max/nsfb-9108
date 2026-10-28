@@ -78,4 +78,24 @@ api.interceptors.response.use(
   }
 );
 
+// ─── Production Work Submissions & Approval API Methods ──────────────────────
+api.uploadSubmission = (requestId, formData) =>
+  api.post(`/production-requests/${requestId}/submissions`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }).then((r) => r.data);
+
+api.fetchSubmissions = (requestId) =>
+  api.get(`/production-requests/${requestId}/submissions`).then((r) => r.data);
+
+api.reviewSubmission = (requestId, submissionId, data) =>
+  api.patch(`/production-requests/${requestId}/submissions/${submissionId}/review`, data).then((r) => r.data);
+
+api.fetchApprovalsQueue = () =>
+  api.get('/production-requests/approvals/queue').then((r) => r.data);
+
+export const uploadSubmission = api.uploadSubmission;
+export const fetchSubmissions = api.fetchSubmissions;
+export const reviewSubmission = api.reviewSubmission;
+export const fetchApprovalsQueue = api.fetchApprovalsQueue;
+
 export default api;
